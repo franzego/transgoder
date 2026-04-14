@@ -58,10 +58,10 @@ func main() {
 	defer postgresConn.Close()
 
 	// Connect to MinIO
-	minioClient, err := connection.NewMinioConnection(ctx, &cfg.Minio)
+	minioClient, err := connection.NewMinioConnection(ctx, &cfg.Minio, logger)
 	if err != nil {
 		logger.Error("Failed to connect to minio", "error", err)
-		log.Fatalf("Failed to connect to minio: %v", err)
+		os.Exit(1)
 	}
 
 	// Initialize Repository

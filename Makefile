@@ -1,5 +1,12 @@
 .PHONY: help run build test clean lint migrate-up migrate-down migrate-force sqlc fmt vet
 
+# PostgreSQL connection variables
+POSTGRES_HOST ?= localhost
+POSTGRES_PORT ?= 5439
+POSTGRES_DB ?= transcoder
+POSTGRES_USER ?= transcoder
+POSTGRES_PASSWORD ?= transcoder_password
+
 help:
 	@echo "Available commands:"
 	@echo "  make run              - Run the application"
