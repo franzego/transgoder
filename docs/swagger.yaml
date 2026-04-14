@@ -1,0 +1,133 @@
+basePath: /
+definitions:
+  models.ApiMessage:
+    properties:
+      code:
+        type: integer
+      error:
+        type: string
+      message:
+        type: string
+      metadata: {}
+      success:
+        type: boolean
+    type: object
+  models.MultipartCompleteRequest:
+    properties:
+      bitrate:
+        type: integer
+      description:
+        type: string
+      duration:
+        type: integer
+      format:
+        type: string
+      job_id:
+        type: string
+      parts:
+        items:
+          $ref: '#/definitions/models.MultipartUploadPart'
+        type: array
+      resolution:
+        type: string
+      upload_id:
+        type: string
+      video_name:
+        type: string
+    required:
+    - job_id
+    - parts
+    - upload_id
+    type: object
+  models.MultipartInitiateRequest:
+    properties:
+      file_name:
+        type: string
+      file_size:
+        type: integer
+      part_size:
+        type: integer
+    required:
+    - file_size
+    type: object
+  models.MultipartUploadPart:
+    properties:
+      etag:
+        type: string
+      part_number:
+        type: integer
+    required:
+    - etag
+    - part_number
+    type: object
+host: localhost:8084
+info:
+  contact: {}
+  description: API for transcoding workflows with multipart upload support.
+  title: Transcoder API
+  version: 0.1.0
+paths:
+  /upload/complete:
+    post:
+      consumes:
+      - application/json
+      description: Finish uploading video parts and create metadata
+      parameters:
+      - description: Upload completion request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.MultipartCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Upload completed successfully
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "400":
+          description: Invalid request payload
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Complete a multipart upload
+      tags:
+      - uploads
+  /upload/initiate:
+    post:
+      consumes:
+      - application/json
+      description: Start a new multipart upload for a video file
+      parameters:
+      - description: Upload initiation request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.MultipartInitiateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Upload initiated successfully
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "400":
+          description: Invalid request payload
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Initiate a multipart upload
+      tags:
+      - uploads
+schemes:
+- http
+- https
+swagger: "2.0"
