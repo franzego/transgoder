@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcoder - Video Upload</title>
+    <script src="https://unpkg.com/htmx.org"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+        }
+
+        .file-label {
+            display: block;
+            padding: 15px 20px;
+            background: #f5f5f5;
+            border: 2px dashed #999;
+            border-radius: 6px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            color: #666;
+        }
+
+        .file-label:hover {
+            border-color: #667eea;
+            background: #f9f9f9;
+        }
+
+        input[type="file"]:focus + .file-label {
+            border-color: #667eea;
+            background: #f9f9f9;
+        }
+
+        .file-name {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e8f4f8;
+            border-left: 3px solid #667eea;
+            border-radius: 4px;
+            color: #333;
+            font-size: 14px;
+            display: none;
+        }
+
+        .file-name.show {
+            display: block;
+        }
+
+        .input-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        textarea {
+            resize: vertical;
+            grid-column: 1 / -1;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            margin-top: 30px;
+            padding: 15px;
+            border-radius: 6px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status.show {
+            display: block;
+        }
+
+        .status.info {
+            background: #e3f2fd;
+            border-left: 3px solid #2196f3;
+            color: #1565c0;
+        }
+
+        .status.success {
+            background: #e8f5e9;
+            border-left: 3px solid #4caf50;
+            color: #2e7d32;
+        }
+
+        .status.error {
+            background: #ffebee;
+            border-left: 3px solid #f44336;
+            color: #c62828;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #eee;
+            border-radius: 3px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #667eea;
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .upload-result {
+            margin-top: 15px;
+            padding: 15px;
+            background: white;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .upload-result.show {
+            display: block;
+        }
+
+        .result-key {
+            font-weight: 600;
+            color: #333;
+            display: inline-block;
+            min-width: 80px;
+        }
+
+        .result-value {
+            color: #666;
+            word-break: break-all;
+        }
+
+        .htmx-swapping {
+            opacity: 0;
+        }
+
+        .htmx-settling {
+            opacity: 1;
+            transition: opacity 0.3s;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Transcoder</h1>
+        <p class="subtitle">Upload and manage your video files</p>
+
+        <div class="form-group">
+            <label>Select Video File</label>
+            <div class="file-input-wrapper">
+                <input type="file" id="videoFile" accept="video/*" onchange="handleFileSelect()">
+                <label for="videoFile" class="file-label">
+                    Click to select or drag and drop a video file
+                </label>
+            </div>
+            <div id="selectedFile" class="file-name"></div>
+        </div>
+
+        <div class="input-row">
+            <div class="form-group">
+                <label>Video Name</label>
+                <input type="text" id="videoName" placeholder="e.g., My Video">
+            </div>
+            <div class="form-group">
+                <label>Format</label>
+                <input type="text" id="format" placeholder="e.g., mp4" value="mp4">
+            </div>
+        </div>
+
+        <div class="input-row">
+            <div class="form-group">
+                <label>Resolution</label>
+                <input type="text" id="resolution" placeholder="e.g., 1920x1080">
+            </div>
+            <div class="form-group">
+                <label>Bitrate (kbps)</label>
+                <input type="number" id="bitrate" placeholder="e.g., 5000">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Description</label>
+            <textarea id="description" placeholder="Enter video description" rows="3"></textarea>
+        </div>
+
+        <button onclick="startUpload()" id="uploadBtn">Upload Video</button>
+
+        <div id="status" class="status"></div>
+        <div id="uploadResult" class="upload-result"></div>
+    </div>
+
+    <script>
+        let selectedFile = null;
+        let uploadState = {
+            jobId: null,
+            uploadId: null,
+            parts: [],
+            etags: []
+        };
+
+        function handleFileSelect(e) {
+            const input = document.getElementById('videoFile');
+            const file = input.files[0];
+
+            if (file) {
+                selectedFile = file;
+                const fileNameEl = document.getElementById('selectedFile');
+                fileNameEl.textContent = `Selected: ${file.name} (${formatFileSize(file.size)})`;
+                fileNameEl.classList.add('show');
+
+                if (!document.getElementById('videoName').value) {
+                    document.getElementById('videoName').value = file.name.replace(/\.[^/.]+$/, '');
+                }
+            }
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function showStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.className = `status show ${type}`;
+            statusEl.textContent = message;
+            window.scrollTo(0, statusEl.offsetTop - 100);
+        }
+
+        async function startUpload() {
+            if (!selectedFile) {
+                showStatus('Please select a video file', 'error');
+                return;
+            }
+
+            document.getElementById('uploadBtn').disabled = true;
+
+            try {
+                // Step 1: Initiate upload
+                showStatus('Initiating upload...', 'info');
+                
+                const initiateResp = await fetch('/upload/initiate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_name: selectedFile.name,
+                        file_size: selectedFile.size,
+                        part_size: 67108864 // 64MB
+                    })
+                });
+
+                if (!initiateResp.ok) {
+                    throw new Error(`Initiate failed: ${initiateResp.statusText}`);
+                }
+
+                const initiateData = await initiateResp.json();
+                
+                if (!initiateData.success) {
+                    throw new Error(initiateData.error || 'Failed to initiate upload');
+                }
+
+                const metadata = initiateData.metadata;
+                if (!metadata || !metadata.job_id || !metadata.upload_id) {
+                    throw new Error('Invalid response: missing job_id or upload_id');
+                }
+
+                uploadState.jobId = metadata.job_id;
+                uploadState.uploadId = metadata.upload_id;
+                uploadState.parts = metadata.parts || [];
+
+                if (!uploadState.parts.length) {
+                    throw new Error('No presigned URLs received');
+                }
+
+                showStatus(`Upload initiated. JobID: ${uploadState.jobId}`, 'success');
+
+                // Step 2: Upload parts
+                showStatus(`Uploading ${uploadState.parts.length} parts...`, 'info');
+                
+                uploadState.etags = await uploadParts(selectedFile, uploadState.parts);
+
+                // Step 3: Complete upload
+                showStatus('Completing upload...', 'info');
+
+                const completeResp = await fetch('/upload/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        job_id: uploadState.jobId,
+                        upload_id: uploadState.uploadId,
+                        parts: uploadState.etags,
+                        video_name: document.getElementById('videoName').value,
+                        description: document.getElementById('description').value,
+                        format: document.getElementById('format').value,
+                        resolution: document.getElementById('resolution').value,
+                        bitrate: document.getElementById('bitrate').value ? parseInt(document.getElementById('bitrate').value) : null,
+                        duration: null
+                    })
+                });
+
+                if (!completeResp.ok) {
+                    throw new Error(`Complete failed: ${completeResp.statusText}`);
+                }
+
+                const completeData = await completeResp.json();
+                
+                if (!completeData.success) {
+                    throw new Error(completeData.error || 'Failed to complete upload');
+                }
+
+                showStatus('Upload completed successfully!', 'success');
+                displayResult(completeData.metadata);
+                
+                // Reset
+                document.getElementById('videoFile').value = '';
+                selectedFile = null;
+                document.getElementById('selectedFile').classList.remove('show');
+
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                console.error('Upload error:', error);
+            } finally {
+                document.getElementById('uploadBtn').disabled = false;
+            }
+        }
+
+        function displayResult(metadata) {
+            const resultDiv = document.getElementById('uploadResult');
+            if (!metadata) {
+                resultDiv.innerHTML = '<div style="margin-bottom: 10px;"><strong>Upload Complete</strong></div>';
+                resultDiv.classList.add('show');
+                return;
+            }
+
+            const html = `
+                <div style="margin-bottom: 10px;"><strong>Upload Complete</strong></div>
+                ${metadata.video_id ? `<div><span class="result-key">Video ID:</span> <span class="result-value">${metadata.video_id}</span></div>` : ''}
+                ${metadata.job_id ? `<div><span class="result-key">Job ID:</span> <span class="result-value">${metadata.job_id}</span></div>` : ''}
+                ${metadata.status ? `<div><span class="result-key">Status:</span> <span class="result-value">${metadata.status}</span></div>` : ''}
+            `;
+            resultDiv.innerHTML = html;
+            resultDiv.classList.add('show');
+        }
+
+        async function uploadParts(file, parts) {
+            const etags = [];
+            let uploaded = 0;
+
+            for (const part of parts) {
+                const start = (part.part_number - 1) * 67108864;
+                const end = Math.min(start + 67108864, file.size);
+                const chunk = file.slice(start, end);
+
+                try {
+                    const uploadResp = await fetch(part.url, {
+                        method: 'PUT',
+                        body: chunk,
+                        headers: { 'Content-Type': 'video/mp4' }
+                    });
+
+                    if (!uploadResp.ok) {
+                        throw new Error(`HTTP ${uploadResp.status}: ${uploadResp.statusText}`);
+                    }
+
+                    const etag = uploadResp.headers.get('ETag');
+                    if (!etag) {
+                        throw new Error('No ETag returned from server');
+                    }
+
+                    etags.push({
+                        part_number: part.part_number,
+                        etag: etag.replace(/^"(.*)"$/, '$1')
+                    });
+
+                    uploaded++;
+                    const progress = Math.round((uploaded / parts.length) * 100);
+                    showStatus(`Uploading parts: ${uploaded}/${parts.length} (${progress}%)`, 'info');
+
+                } catch (error) {
+                    throw new Error(`Failed to upload part ${part.part_number}: ${error.message}`);
+                }
+            }
+
+            return etags;
+        }
+
+        // Drag and drop
+        const fileInput = document.getElementById('videoFile');
+        const fileLabel = fileInput.nextElementSibling;
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            fileLabel.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            fileLabel.addEventListener(eventName, () => {
+                fileLabel.style.borderColor = '#667eea';
+                fileLabel.style.background = '#f0f4ff';
+            });
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            fileLabel.addEventListener(eventName, () => {
+                fileLabel.style.borderColor = '#999';
+                fileLabel.style.background = '#f5f5f5';
+            });
+        });
+
+        fileLabel.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            fileInput.files = files;
+            handleFileSelect();
+        });
+    </script>
+</body>
+</html>

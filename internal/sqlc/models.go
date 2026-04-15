@@ -16,9 +16,17 @@ type Job struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PresignedUrl struct {
+	ID           int32              `json:"id"`
+	JobID        string             `json:"job_id"`
+	PartNumber   int32              `json:"part_number"`
+	PresignedUrl string             `json:"presigned_url"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Videometum struct {
 	ID          int32              `json:"id"`
-	JobID       int32              `json:"job_id"`
+	JobID       string             `json:"job_id"`
 	VideoName   pgtype.Text        `json:"video_name"`
 	Description pgtype.Text        `json:"description"`
 	Format      pgtype.Text        `json:"format"`

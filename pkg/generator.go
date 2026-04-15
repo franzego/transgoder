@@ -9,5 +9,5 @@ import (
 func GenerateID() string {
 	id := uuid.New().String()
 	short := strings.ReplaceAll(id, "-", "")[:8]
-	return "JB" + strings.ToUpper(short)
+	return "JB-" + strings.ToUpper(short)
 }

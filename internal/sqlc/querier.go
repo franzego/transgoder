@@ -10,13 +10,16 @@ import (
 
 type Querier interface {
 	CreateJob(ctx context.Context, arg CreateJobParams) (Job, error)
+	CreatePresignedURL(ctx context.Context, arg CreatePresignedURLParams) (PresignedUrl, error)
 	CreateVideoMeta(ctx context.Context, arg CreateVideoMetaParams) (Videometum, error)
 	DeleteJob(ctx context.Context, id int32) error
+	DeletePresignedURLsByJobID(ctx context.Context, jobID string) error
 	DeleteVideoMeta(ctx context.Context, id int32) error
 	GetJobByID(ctx context.Context, id int32) (Job, error)
 	GetJobByJobID(ctx context.Context, jobID string) (Job, error)
+	GetPresignedURLsByJobID(ctx context.Context, jobID string) ([]PresignedUrl, error)
 	GetVideoMetaByID(ctx context.Context, id int32) (Videometum, error)
-	GetVideoMetaByJobID(ctx context.Context, jobID int32) (Videometum, error)
+	GetVideoMetaByJobID(ctx context.Context, jobID string) (Videometum, error)
 	ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, error)
 	ListVideoMeta(ctx context.Context, arg ListVideoMetaParams) ([]Videometum, error)
 	UpdateJobStatus(ctx context.Context, arg UpdateJobStatusParams) (Job, error)

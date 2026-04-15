@@ -2,11 +2,11 @@
 
 # PostgreSQL connection variables
 POSTGRES_HOST ?= localhost
-POSTGRES_PORT ?= 5439
-POSTGRES_DB ?= transcoder
+POSTGRES_PORT ?= 5440
+POSTGRES_DB ?= transcoderdb
 POSTGRES_USER ?= transcoder
 POSTGRES_PASSWORD ?= transcoder_password
-
+VERSION ?= 1
 help:
 	@echo "Available commands:"
 	@echo "  make run              - Run the application"

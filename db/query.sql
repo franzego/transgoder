@@ -74,3 +74,19 @@ RETURNING id, job_id, video_name, description, format, bitrate, resolution, dura
 -- name: DeleteVideoMeta :exec
 DELETE FROM videometa
 WHERE id = $1;
+
+-- name: CreatePresignedURL :one
+INSERT INTO presigned_urls (job_id, part_number, presigned_url)
+VALUES ($1, $2, $3)
+RETURNING id, job_id, part_number, presigned_url, created_at;
+
+-- name: GetPresignedURLsByJobID :many
+SELECT id, job_id, part_number, presigned_url, created_at
+FROM presigned_urls
+WHERE job_id = $1
+ORDER BY part_number ASC;
+
+-- name: DeletePresignedURLsByJobID :exec
+DELETE FROM presigned_urls
+WHERE job_id = $1;
+

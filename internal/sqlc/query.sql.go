@@ -35,6 +35,31 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 	return i, err
 }
 
+const createPresignedURL = `-- name: CreatePresignedURL :one
+INSERT INTO presigned_urls (job_id, part_number, presigned_url)
+VALUES ($1, $2, $3)
+RETURNING id, job_id, part_number, presigned_url, created_at
+`
+
+type CreatePresignedURLParams struct {
+	JobID        string `json:"job_id"`
+	PartNumber   int32  `json:"part_number"`
+	PresignedUrl string `json:"presigned_url"`
+}
+
+func (q *Queries) CreatePresignedURL(ctx context.Context, arg CreatePresignedURLParams) (PresignedUrl, error) {
+	row := q.db.QueryRow(ctx, createPresignedURL, arg.JobID, arg.PartNumber, arg.PresignedUrl)
+	var i PresignedUrl
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.PartNumber,
+		&i.PresignedUrl,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createVideoMeta = `-- name: CreateVideoMeta :one
 INSERT INTO videometa (
 	job_id,
@@ -50,7 +75,7 @@ RETURNING id, job_id, video_name, description, format, bitrate, resolution, dura
 `
 
 type CreateVideoMetaParams struct {
-	JobID       int32       `json:"job_id"`
+	JobID       string      `json:"job_id"`
 	VideoName   pgtype.Text `json:"video_name"`
 	Description pgtype.Text `json:"description"`
 	Format      pgtype.Text `json:"format"`
@@ -92,6 +117,16 @@ WHERE id = $1
 
 func (q *Queries) DeleteJob(ctx context.Context, id int32) error {
 	_, err := q.db.Exec(ctx, deleteJob, id)
+	return err
+}
+
+const deletePresignedURLsByJobID = `-- name: DeletePresignedURLsByJobID :exec
+DELETE FROM presigned_urls
+WHERE job_id = $1
+`
+
+func (q *Queries) DeletePresignedURLsByJobID(ctx context.Context, jobID string) error {
+	_, err := q.db.Exec(ctx, deletePresignedURLsByJobID, jobID)
 	return err
 }
 
@@ -143,6 +178,39 @@ func (q *Queries) GetJobByJobID(ctx context.Context, jobID string) (Job, error) 
 	return i, err
 }
 
+const getPresignedURLsByJobID = `-- name: GetPresignedURLsByJobID :many
+SELECT id, job_id, part_number, presigned_url, created_at
+FROM presigned_urls
+WHERE job_id = $1
+ORDER BY part_number ASC
+`
+
+func (q *Queries) GetPresignedURLsByJobID(ctx context.Context, jobID string) ([]PresignedUrl, error) {
+	rows, err := q.db.Query(ctx, getPresignedURLsByJobID, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PresignedUrl
+	for rows.Next() {
+		var i PresignedUrl
+		if err := rows.Scan(
+			&i.ID,
+			&i.JobID,
+			&i.PartNumber,
+			&i.PresignedUrl,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getVideoMetaByID = `-- name: GetVideoMetaByID :one
 SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
 FROM videometa
@@ -173,7 +241,7 @@ FROM videometa
 WHERE job_id = $1
 `
 
-func (q *Queries) GetVideoMetaByJobID(ctx context.Context, jobID int32) (Videometum, error) {
+func (q *Queries) GetVideoMetaByJobID(ctx context.Context, jobID string) (Videometum, error) {
 	row := q.db.QueryRow(ctx, getVideoMetaByJobID, jobID)
 	var i Videometum
 	err := row.Scan(

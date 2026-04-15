@@ -10,7 +10,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_job_id ON jobs (job_id);
 
 CREATE TABLE IF NOT EXISTS videometa (
     id SERIAL PRIMARY KEY,
-    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    job_id VARCHAR(20) NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
     video_name TEXT,
     description TEXT,
     format TEXT,

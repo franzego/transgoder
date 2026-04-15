@@ -104,6 +104,7 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 
 	totalParts := int((req.FileSize + partSize - 1) / partSize)
 	urls := make([]map[string]any, 0, totalParts)
+
 	for partNumber := 1; partNumber <= totalParts; partNumber++ {
 		url, err := h.minioService.PresignedUploadPartURL(
 			c.Request.Context(),
@@ -123,6 +124,20 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 			})
 			return
 		}
+
+		// Store presigned URL in database
+		_, err = h.service.CreatePresignedURL(c.Request.Context(), jobID, url, int32(partNumber))
+		if err != nil {
+			h.logger.Error("Failed to store presigned URL", "job_id", jobID, "part", partNumber, "error", err)
+			c.JSON(http.StatusInternalServerError, models.ApiMessage{
+				Success: false,
+				Message: "Failed to store presigned URL",
+				Code:    500,
+				Error:   err.Error(),
+			})
+			return
+		}
+
 		urls = append(urls, map[string]any{
 			"part_number": partNumber,
 			"url":         url,
@@ -212,8 +227,8 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		return
 	}
 
-	meta, err := h.service.CreateVideoMeta(c.Request.Context(), sqlc.CreateVideoMetaParams{
-		JobID:       job.ID,
+	_, err = h.service.CreateVideoMeta(c.Request.Context(), sqlc.CreateVideoMetaParams{
+		JobID:       job.JobID,
 		VideoName:   pkg.TextOrNull(req.VideoName),
 		Description: pkg.TextOrNull(req.Description),
 		Format:      pkg.TextOrNull(req.Format),
@@ -252,9 +267,9 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		Message: "Multipart upload completed and metadata stored",
 		Code:    200,
 		Metadata: map[string]any{
-			"job_id":   req.JobID,
-			"video_id": meta.ID,
-			"status":   models.StatusQueued,
+			"video_id": req.JobID,
+			// "video_id": meta.ID,
+			"status": "Currently queued for transcoding. It may take a few minutes.",
 		},
 	})
 }

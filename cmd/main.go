@@ -95,6 +95,12 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// Serve static files
+	router.Static("/web", "./web")
+	router.GET("/", func(c *gin.Context) {
+		c.File("./web/index.html")
+	})
+
 	// Upload routes
 	uploadGroup := router.Group("/upload")
 	{

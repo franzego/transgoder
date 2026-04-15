@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/franzego/transgoder/internal/repository"
 	"github.com/franzego/transgoder/internal/sqlc"
@@ -12,6 +13,12 @@ type ServiceRepository interface {
 	GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error)
 	UpdateJobStatus(ctx context.Context, arg sqlc.UpdateJobStatusParams) (sqlc.Job, error)
 	CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error)
+	Presigner
+}
+
+type Presigner interface {
+	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
+	GetPresignedURLsByJobID(ctx context.Context, jobID string) ([]sqlc.PresignedUrl, error)
 }
 
 type RepoService struct {
@@ -70,7 +77,7 @@ func (r *RepoService) UpdateJobStatus(ctx context.Context, arg sqlc.UpdateJobSta
 }
 
 func (r *RepoService) CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
-	if arg.JobID == 0 {
+	if arg.JobID == "" {
 		return sqlc.Videometum{}, ErrInvalidJobID
 	}
 	item, err := r.repo.Q.CreateVideoMeta(ctx, arg)
@@ -82,4 +89,61 @@ func (r *RepoService) CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoM
 		}
 	}
 	return item, nil
+}
+
+func (r *RepoService) CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error) {
+	if jobID == "" {
+		return sqlc.PresignedUrl{}, ErrInvalidJobID
+	}
+
+	// Get the job by jobID to get the internal ID
+	job, err := r.repo.Q.GetJobByJobID(ctx, jobID)
+	if err != nil {
+		return sqlc.PresignedUrl{}, &ServiceError{
+			Err:     err,
+			Code:    500,
+			Message: "failed to get job",
+		}
+	}
+
+	arg := sqlc.CreatePresignedURLParams{
+		JobID:        job.JobID,
+		PresignedUrl: presignedUrl,
+		PartNumber:   partNumber,
+	}
+	item, err := r.repo.Q.CreatePresignedURL(ctx, arg)
+	if err != nil {
+		return sqlc.PresignedUrl{}, &ServiceError{
+			Err:     err,
+			Code:    500,
+			Message: "failed to create presigned URL",
+		}
+	}
+	return item, nil
+}
+
+func (r *RepoService) GetPresignedURLsByJobID(ctx context.Context, jobID string) ([]sqlc.PresignedUrl, error) {
+	if jobID == "" {
+		return nil, ErrEmptyJobID
+	}
+
+	// Get the job by jobID to get the internal ID
+	job, err := r.repo.Q.GetJobByJobID(ctx, jobID)
+	if err != nil {
+		return nil, &ServiceError{
+			Err:     err,
+			Code:    500,
+			Message: "failed to get job",
+		}
+	}
+
+	urls, err := r.repo.Q.GetPresignedURLsByJobID(ctx, job.JobID)
+	if err != nil {
+		return nil, &ServiceError{
+			Err:     err,
+			Code:    500,
+			Message: fmt.Sprintf("failed to get presigned urls for job ID: %s", jobID),
+		}
+	}
+	return urls, nil
 }
