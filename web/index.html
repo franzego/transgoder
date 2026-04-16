@@ -354,7 +354,7 @@
             try {
                 // Step 1: Initiate upload
                 showStatus('Initiating upload...', 'info');
-                
+
                 const initiateResp = await fetch('/upload/initiate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -370,7 +370,7 @@
                 }
 
                 const initiateData = await initiateResp.json();
-                
+
                 if (!initiateData.success) {
                     throw new Error(initiateData.error || 'Failed to initiate upload');
                 }
@@ -392,7 +392,7 @@
 
                 // Step 2: Upload parts
                 showStatus(`Uploading ${uploadState.parts.length} parts...`, 'info');
-                
+
                 uploadState.etags = await uploadParts(selectedFile, uploadState.parts);
 
                 // Step 3: Complete upload
@@ -419,14 +419,14 @@
                 }
 
                 const completeData = await completeResp.json();
-                
+
                 if (!completeData.success) {
                     throw new Error(completeData.error || 'Failed to complete upload');
                 }
 
                 showStatus('Upload completed successfully!', 'success');
                 displayResult(completeData.metadata);
-                
+
                 // Reset
                 document.getElementById('videoFile').value = '';
                 selectedFile = null;

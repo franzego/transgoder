@@ -31,10 +31,12 @@ type PostgresConfig struct {
 }
 
 type RedisConfig struct {
-	Host     string
-	Port     int
-	Password string
-	DB       int
+	Host       string
+	Port       int
+	Password   string
+	DB         int
+	StreamName string
+	GroupName  string
 }
 
 type MinioConfig struct {
@@ -71,10 +73,12 @@ func Load() (*Config, error) {
 			SSLMode:  getEnv("POSTGRES_SSLMODE", "disable"),
 		},
 		Redis: RedisConfig{
-			Host:     getEnv("REDIS_HOST", "localhost"),
-			Port:     getEnvInt("REDIS_PORT", 6379),
-			Password: getEnv("REDIS_PASSWORD", ""),
-			DB:       getEnvInt("REDIS_DB", 0),
+			Host:       getEnv("REDIS_HOST", "localhost"),
+			Port:       getEnvInt("REDIS_PORT", 6379),
+			Password:   getEnv("REDIS_PASSWORD", ""),
+			DB:         getEnvInt("REDIS_DB", 0),
+			StreamName: getEnv("REDIS_STREAM_NAME", ""),
+			GroupName:  getEnv("REDIS_GROUP_NAME", ""),
 		},
 		Minio: MinioConfig{
 			Endpoint:       getEnv("MINIO_ENDPOINT", "localhost:9000"),

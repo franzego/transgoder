@@ -18,6 +18,9 @@ type MinioService struct {
 }
 
 func NewMinioService(cfg *config.MinioConfig, client *connection.MinioClient) *MinioService {
+	if cfg == nil || client == nil {
+		return nil
+	}
 	return &MinioService{
 		Cfg:    cfg,
 		Client: client,
