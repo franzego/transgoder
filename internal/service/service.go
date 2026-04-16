@@ -8,19 +8,6 @@ import (
 	"github.com/franzego/transgoder/internal/sqlc"
 )
 
-type ServiceRepository interface {
-	CreateJob(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error)
-	GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error)
-	UpdateJobStatus(ctx context.Context, arg sqlc.UpdateJobStatusParams) (sqlc.Job, error)
-	CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error)
-	Presigner
-}
-
-type Presigner interface {
-	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
-	GetPresignedURLsByJobID(ctx context.Context, jobID string) ([]sqlc.PresignedUrl, error)
-}
-
 type RepoService struct {
 	repo *repository.Repo
 }

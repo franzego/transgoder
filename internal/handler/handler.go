@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -13,18 +14,39 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
+type ServiceRepository interface {
+	CreateJob(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error)
+	GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error)
+	UpdateJobStatus(ctx context.Context, arg sqlc.UpdateJobStatusParams) (sqlc.Job, error)
+	CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error)
+}
+
+// For minio
+type Presigner interface {
+	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
+	GetPresignedURLsByJobID(ctx context.Context, jobID string) ([]sqlc.PresignedUrl, error)
+}
+
+// For redis queue
+type Queuer interface {
+	Enqueue(ctx context.Context, jobID string) error
+	Dequeue(ctx context.Context, workerID string) (string, string, error)
+}
+
 type Handler struct {
 	minioService *service.MinioService
-	service      service.ServiceRepository
+	service      *service.RepoService
 	logger       *slog.Logger
+	redisService *service.RedisService
 	// we will add the services here later
 }
 
-func NewHandler(minioService *service.MinioService, service service.ServiceRepository, logger *slog.Logger) *Handler {
+func NewHandler(minioService *service.MinioService, service *service.RepoService, redisService *service.RedisService, logger *slog.Logger) *Handler {
 	return &Handler{
 		minioService: minioService,
 		service:      service,
 		logger:       logger,
+		redisService: redisService,
 	}
 }
 
@@ -256,6 +278,17 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.ApiMessage{
 			Success: false,
 			Message: "Failed to update job status",
+			Code:    500,
+			Error:   err.Error(),
+		})
+		return
+	}
+	err = h.redisService.Enqueue(c.Request.Context(), req.JobID)
+	if err != nil {
+		h.logger.Error("Failed to enqueue job in redis", "job_id", req.JobID, "error", err)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Success: false,
+			Message: "An error has occured while queuing the job for transcoding. Please contact support.",
 			Code:    500,
 			Error:   err.Error(),
 		})

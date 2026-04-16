@@ -63,6 +63,12 @@ func main() {
 		logger.Error("Failed to connect to minio", "error", err)
 		os.Exit(1)
 	}
+	redisClient, err := connection.NewRedisConnection(ctx, cfg, logger)
+	if err != nil {
+		logger.Error("Failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
+	defer redisClient.Close()
 
 	// Initialize Repository
 	repo := repository.NewRepo(postgresConn)
@@ -74,9 +80,10 @@ func main() {
 	// Initialize Services
 	repoService := service.NewRepoService(repo)
 	minioService := service.NewMinioService(&cfg.Minio, minioClient)
+	redisService := service.NewRedisService(repository.NewRedisRepo(&cfg.Redis, redisClient))
 
 	// Initialize Handler
-	h := handler.NewHandler(minioService, repoService, logger)
+	h := handler.NewHandler(minioService, repoService, redisService, logger)
 
 	// Setup Gin router
 	router := gin.New()
