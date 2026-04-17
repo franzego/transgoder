@@ -144,6 +144,7 @@ const getJobByID = `-- name: GetJobByID :one
 SELECT id, job_id, status, created_at, updated_at
 FROM jobs
 WHERE id = $1
+FOR UPDATE
 `
 
 func (q *Queries) GetJobByID(ctx context.Context, id int32) (Job, error) {
@@ -163,6 +164,7 @@ const getJobByJobID = `-- name: GetJobByJobID :one
 SELECT id, job_id, status, created_at, updated_at
 FROM jobs
 WHERE job_id = $1
+FOR UPDATE
 `
 
 func (q *Queries) GetJobByJobID(ctx context.Context, jobID string) (Job, error) {
@@ -215,6 +217,7 @@ const getVideoMetaByID = `-- name: GetVideoMetaByID :one
 SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
 FROM videometa
 WHERE id = $1
+FOR UPDATE
 `
 
 func (q *Queries) GetVideoMetaByID(ctx context.Context, id int32) (Videometum, error) {
@@ -239,6 +242,7 @@ const getVideoMetaByJobID = `-- name: GetVideoMetaByJobID :one
 SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
 FROM videometa
 WHERE job_id = $1
+FOR UPDATE
 `
 
 func (q *Queries) GetVideoMetaByJobID(ctx context.Context, jobID string) (Videometum, error) {
@@ -344,17 +348,17 @@ const updateJobStatus = `-- name: UpdateJobStatus :one
 UPDATE jobs
 SET status = $2,
     updated_at = NOW()
-WHERE id = $1
+WHERE job_id = $1
 RETURNING id, job_id, status, created_at, updated_at
 `
 
 type UpdateJobStatusParams struct {
-	ID     int32  `json:"id"`
+	JobID  string `json:"job_id"`
 	Status string `json:"status"`
 }
 
 func (q *Queries) UpdateJobStatus(ctx context.Context, arg UpdateJobStatusParams) (Job, error) {
-	row := q.db.QueryRow(ctx, updateJobStatus, arg.ID, arg.Status)
+	row := q.db.QueryRow(ctx, updateJobStatus, arg.JobID, arg.Status)
 	var i Job
 	err := row.Scan(
 		&i.ID,

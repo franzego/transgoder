@@ -6,12 +6,14 @@ RETURNING id, job_id, status, created_at, updated_at;
 -- name: GetJobByID :one
 SELECT id, job_id, status, created_at, updated_at
 FROM jobs
-WHERE id = $1;
+WHERE id = $1
+FOR UPDATE;
 
 -- name: GetJobByJobID :one
 SELECT id, job_id, status, created_at, updated_at
 FROM jobs
-WHERE job_id = $1;
+WHERE job_id = $1
+FOR UPDATE;
 
 -- name: ListJobs :many
 SELECT id, job_id, status, created_at, updated_at
@@ -23,7 +25,7 @@ LIMIT $1 OFFSET $2;
 UPDATE jobs
 SET status = $2,
     updated_at = NOW()
-WHERE id = $1
+WHERE job_id = $1
 RETURNING id, job_id, status, created_at, updated_at;
 
 -- name: DeleteJob :exec
@@ -46,12 +48,14 @@ RETURNING id, job_id, video_name, description, format, bitrate, resolution, dura
 -- name: GetVideoMetaByID :one
 SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
 FROM videometa
-WHERE id = $1;
+WHERE id = $1
+FOR UPDATE;
 
 -- name: GetVideoMetaByJobID :one
 SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
 FROM videometa
-WHERE job_id = $1;
+WHERE job_id = $1
+FOR UPDATE;
 
 -- name: ListVideoMeta :many
 SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at

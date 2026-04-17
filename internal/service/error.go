@@ -25,6 +25,7 @@ func (e *ServiceError) Unwrap() error {
 }
 
 var (
-	ErrInvalidJobID = errors.New("invalid job ID")
-	ErrEmptyJobID   = errors.New("job ID cannot be empty")
+	ErrInvalidJobID      = errors.New("invalid job ID")
+	ErrEmptyJobID        = errors.New("job ID cannot be empty")
+	ErrInvalidTransition = errors.New("invalid status transition")
 )

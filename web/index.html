@@ -270,26 +270,9 @@
             <div id="selectedFile" class="file-name"></div>
         </div>
 
-        <div class="input-row">
-            <div class="form-group">
-                <label>Video Name</label>
-                <input type="text" id="videoName" placeholder="e.g., My Video">
-            </div>
-            <div class="form-group">
-                <label>Format</label>
-                <input type="text" id="format" placeholder="e.g., mp4" value="mp4">
-            </div>
-        </div>
-
-        <div class="input-row">
-            <div class="form-group">
-                <label>Resolution</label>
-                <input type="text" id="resolution" placeholder="e.g., 1920x1080">
-            </div>
-            <div class="form-group">
-                <label>Bitrate (kbps)</label>
-                <input type="number" id="bitrate" placeholder="e.g., 5000">
-            </div>
+        <div class="form-group">
+            <label>Video Name</label>
+            <input type="text" id="videoName" placeholder="e.g., My Video">
         </div>
 
         <div class="form-group">
@@ -407,9 +390,6 @@
                         parts: uploadState.etags,
                         video_name: document.getElementById('videoName').value,
                         description: document.getElementById('description').value,
-                        format: document.getElementById('format').value,
-                        resolution: document.getElementById('resolution').value,
-                        bitrate: document.getElementById('bitrate').value ? parseInt(document.getElementById('bitrate').value) : null,
                         duration: null
                     })
                 });
@@ -452,6 +432,7 @@
                 <div style="margin-bottom: 10px;"><strong>Upload Complete</strong></div>
                 ${metadata.video_id ? `<div><span class="result-key">Video ID:</span> <span class="result-value">${metadata.video_id}</span></div>` : ''}
                 ${metadata.job_id ? `<div><span class="result-key">Job ID:</span> <span class="result-value">${metadata.job_id}</span></div>` : ''}
+                ${metadata.filename ? `<div><span class="result-key">Filename:</span> <span class="result-value">${metadata.filename}</span></div>` : ''}
                 ${metadata.status ? `<div><span class="result-key">Status:</span> <span class="result-value">${metadata.status}</span></div>` : ''}
             `;
             resultDiv.innerHTML = html;

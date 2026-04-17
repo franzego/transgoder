@@ -17,9 +17,9 @@ type ServiceRepository interface {
 	CreateJob(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error)
 	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
 	GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error)
-	UpdateJobStatus(ctx context.Context, arg sqlc.UpdateJobStatusParams) (sqlc.Job, error)
 	CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error)
 	DeleteJob(ctx context.Context, id int32) error
+	TransitionTo(ctx context.Context, jobId string, from, to models.Status) error
 }
 
 // for minio
@@ -329,18 +329,14 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		})
 		return
 	}
-
-	_, err = h.service.UpdateJobStatus(c.Request.Context(), sqlc.UpdateJobStatusParams{
-		ID:     job.ID,
-		Status: string(models.StatusQueued),
-	})
-	if err != nil {
-		h.logger.Error("Failed to update job status", "job_id", req.JobID, "error", err)
+	transitionErr := h.service.TransitionTo(c.Request.Context(), job.JobID, models.StatusPending, models.StatusQueued)
+	if transitionErr != nil {
+		h.logger.Error("Failed to update job status", "job_id", req.JobID, "error", transitionErr)
 		c.JSON(http.StatusInternalServerError, models.ApiMessage{
 			Success: false,
 			Message: "Failed to update job status",
 			Code:    500,
-			Error:   err.Error(),
+			Error:   transitionErr.Error(),
 		})
 		return
 	}
