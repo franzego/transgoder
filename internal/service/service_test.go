@@ -86,7 +86,7 @@ func buildRepoServiceWithDB(db sqlc.DBTX) *RepoService {
 func TestRepoService_CreateJob(t *testing.T) {
 	t.Run("invalid job ID", func(t *testing.T) {
 		svc := buildRepoServiceWithDB(&fakeDB{})
-		_, err := svc.CreateJob(context.Background(), sqlc.CreateJobParams{})
+		_, err := svc.CreateJob(context.Background(), "sqlc.CreateJobParams{}")
 		if !errors.Is(err, ErrInvalidJobID) {
 			t.Fatalf("expected ErrInvalidJobID, got %v", err)
 		}
@@ -102,7 +102,7 @@ func TestRepoService_CreateJob(t *testing.T) {
 			},
 		}
 		svc := buildRepoServiceWithDB(db)
-		_, err := svc.CreateJob(context.Background(), sqlc.CreateJobParams{JobID: "job-1"})
+		_, err := svc.CreateJob(context.Background(), "job-123")
 		var se *ServiceError
 		if !errors.As(err, &se) {
 			t.Fatalf("expected ServiceError, got %T", err)
@@ -126,7 +126,7 @@ func TestRepoService_CreateJob(t *testing.T) {
 			},
 		}
 		svc := buildRepoServiceWithDB(db)
-		job, err := svc.CreateJob(context.Background(), sqlc.CreateJobParams{JobID: "job-1"})
+		job, err := svc.CreateJob(context.Background(), "job-1")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

@@ -8,10 +8,11 @@ service TranscoderService {
 }
 
 message TranscodeRequest {
-  string input_path = 1; // the presignedurl for that particular video file in the MinIO bucket.
-  string output_path = 2;
-  string output_format = 3; // mp4, hls, etc.
-  VideoOptions options = 4;
+  string job_id = 1; // the job that will be worked on.
+  string input_path = 2; // the presignedurl for that particular video file in the MinIO bucket.
+  string output_path = 3;
+  string output_format = 4; // mp4, hls, etc.
+  VideoOptions options = 5;
 }
 
 message VideoOptions {

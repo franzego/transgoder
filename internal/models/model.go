@@ -1,5 +1,7 @@
 package models
 
+import "github.com/jackc/pgx/v5/pgtype"
+
 type Status string
 
 const (
@@ -42,4 +44,16 @@ type MultipartCompleteRequest struct {
 	Codec       string                `json:"codec"`                     //h.264 or h.265
 	Framerate   *int32                `json:"framerate"`                 // 1920x1080
 	Duration    *int32                `json:"duration"`
+}
+
+type VideoMedataReq struct {
+	JobID       string      `json:"job_id"`
+	VideoName   pgtype.Text `json:"video_name"`
+	Description pgtype.Text `json:"description"`
+	Format      pgtype.Text `json:"format"`
+	Bitrate     pgtype.Int4 `json:"bitrate"`
+	Resolution  pgtype.Text `json:"resolution"`
+	Codec       string      `json:"codec"`
+	Framerate   pgtype.Int4 `json:"framerate"`
+	Duration    pgtype.Int4 `json:"duration"`
 }

@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/franzego/transgoder/internal/models"
+	"github.com/franzego/transgoder/internal/service"
 	"github.com/franzego/transgoder/internal/sqlc"
 	"github.com/franzego/transgoder/pkg"
 	"github.com/gin-gonic/gin"
@@ -15,10 +17,10 @@ import (
 )
 
 type ServiceRepository interface {
-	CreateJob(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error)
+	CreateJob(ctx context.Context, jobID string) (sqlc.Job, error)
 	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
 	GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error)
-	CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error)
+	CreateVideoMeta(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error)
 	DeleteJob(ctx context.Context, id int32) error
 	TransitionTo(ctx context.Context, jobId string, from, to models.Status) error
 }
@@ -72,6 +74,7 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 	//  then it will upload the parts directly to MinIO using those URLs. Once all parts are uploaded,
 	// the frontend will call the complete endpoint to finalize the upload and create the job in the database.
 	var req models.MultipartInitiateRequest
+	var srvError *service.ServiceError
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.ApiMessage{
 			Success: false,
@@ -127,12 +130,23 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 	}
 
 	jobID := pkg.GenerateID()
-	job, err := h.service.CreateJob(c.Request.Context(), sqlc.CreateJobParams{JobID: jobID})
+
+	job, err := h.service.CreateJob(c.Request.Context(), jobID)
 	if err != nil {
-		h.logger.Error("Failed to create job", "job_id", jobID, "error", err)
+		if errors.As(err, &srvError) {
+			h.logger.Error("Failed to create job", "job_id", jobID, "error", &srvError)
+			c.JSON(http.StatusInternalServerError, models.ApiMessage{
+				Success: false,
+				Message: "Failed to create job",
+				Code:    500,
+				Error:   err.Error(),
+			})
+			return
+		}
+		h.logger.Error("Unexpected error when creating job", "job_id", jobID, "error", err)
 		c.JSON(http.StatusInternalServerError, models.ApiMessage{
 			Success: false,
-			Message: "Failed to create job",
+			Message: "An unexpected error has occurred while creating the job. Please contact support.",
 			Code:    500,
 			Error:   err.Error(),
 		})
@@ -303,8 +317,7 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 	if codec == "" {
 		codec = "h264"
 	}
-
-	_, err = h.service.CreateVideoMeta(c.Request.Context(), sqlc.CreateVideoMetaParams{
+	metaData := models.VideoMedataReq{
 		JobID:       job.JobID,
 		VideoName:   pkg.TextOrNull(req.VideoName),
 		Description: pkg.TextOrNull(req.Description),
@@ -314,7 +327,8 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		Codec:       codec,
 		Framerate:   pkg.IntOrNull(req.Framerate),
 		Duration:    pkg.IntOrNull(req.Duration),
-	})
+	}
+	_, err = h.service.CreateVideoMeta(c.Request.Context(), metaData)
 	if err != nil {
 		h.logger.Error("Failed to create video metadata", "job_id", req.JobID, "error", err)
 		c.JSON(http.StatusInternalServerError, models.ApiMessage{
