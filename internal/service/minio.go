@@ -1,3 +1,4 @@
+// Package service is responsible for all business logic relating to each service.
 package service
 
 import (

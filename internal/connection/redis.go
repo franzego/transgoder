@@ -1,3 +1,4 @@
+// Package connection is responsible for setting up connection to external services
 package connection
 
 import (
@@ -27,6 +28,7 @@ func NewRedisConnection(ctx context.Context, c *config.Config, logg *slog.Logger
 	logg.Info("Starting creation of group and stream", "streamname", c.Redis.StreamName, "groupname", c.Redis.GroupName)
 	err := client.XGroupCreateMkStream(ctx, c.Redis.StreamName, c.Redis.GroupName, "0").Err()
 	if err != nil && !strings.HasPrefix(err.Error(), "BUSYGROUP") {
+		logg.Error("Error creating group and stream", "error", err)
 		return nil, err
 	}
 

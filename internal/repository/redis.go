@@ -33,6 +33,8 @@ func (re *RedisRepo) AddtoStream(ctx context.Context, jobID string) error {
 	}
 	_, err := re.conn.XAdd(ctx, &redis.XAddArgs{
 		Stream: re.cfg.StreamName,
+		MaxLen: 10000,
+		Approx: true,
 		Values: map[string]string{
 			"job": jobID,
 		},
