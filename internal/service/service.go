@@ -134,3 +134,18 @@ func (r *RepoService) GetPresignedURLsByJobID(ctx context.Context, jobID string)
 	}
 	return urls, nil
 }
+
+func (r *RepoService) DeleteJob(ctx context.Context, id int32) error {
+	if id == 0 {
+		return ErrInvalidJobID
+	}
+
+	if err := r.repo.Q.DeleteJob(ctx, id); err != nil {
+		return &ServiceError{
+			Err:     err,
+			Code:    500,
+			Message: "failed to delete job",
+		}
+	}
+	return nil
+}

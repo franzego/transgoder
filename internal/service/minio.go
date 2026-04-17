@@ -27,6 +27,10 @@ func NewMinioService(cfg *config.MinioConfig, client *connection.MinioClient) *M
 	}
 }
 
+func (m *MinioService) UploadBucket() string {
+	return m.Cfg.UploadBucket
+}
+
 func (m *MinioService) PutPresignedURL(ctx context.Context, bucketName, jobID string) (string, error) {
 	url, err := m.Client.PresignedPutObject(ctx, bucketName, jobID, 60*time.Minute)
 	if err != nil {

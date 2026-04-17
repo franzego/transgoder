@@ -77,8 +77,8 @@ func Load() (*Config, error) {
 			Port:       getEnvInt("REDIS_PORT", 6379),
 			Password:   getEnv("REDIS_PASSWORD", ""),
 			DB:         getEnvInt("REDIS_DB", 0),
-			StreamName: getEnv("REDIS_STREAM_NAME", ""),
-			GroupName:  getEnv("REDIS_GROUP_NAME", ""),
+			StreamName: getEnv("REDIS_STREAM_NAME", "transcoder_stream"),
+			GroupName:  getEnv("REDIS_GROUP_NAME", "transcoder_group"),
 		},
 		Minio: MinioConfig{
 			Endpoint:       getEnv("MINIO_ENDPOINT", "localhost:9000"),

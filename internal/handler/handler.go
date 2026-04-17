@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/franzego/transgoder/internal/models"
-	"github.com/franzego/transgoder/internal/service"
 	"github.com/franzego/transgoder/internal/sqlc"
 	"github.com/franzego/transgoder/pkg"
 	"github.com/gin-gonic/gin"
@@ -16,15 +15,20 @@ import (
 
 type ServiceRepository interface {
 	CreateJob(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error)
+	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
 	GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error)
 	UpdateJobStatus(ctx context.Context, arg sqlc.UpdateJobStatusParams) (sqlc.Job, error)
 	CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error)
+	DeleteJob(ctx context.Context, id int32) error
 }
 
-// For minio
-type Presigner interface {
-	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
-	GetPresignedURLsByJobID(ctx context.Context, jobID string) ([]sqlc.PresignedUrl, error)
+// for minio
+type MultipartService interface {
+	UploadBucket() string
+	NewMultipartUpload(ctx context.Context, bucketName, objectName string) (string, error)
+	PresignedUploadPartURL(ctx context.Context, bucketName, objectName, uploadID string, partNumber int, expires time.Duration) (string, error)
+	CompleteMultipartUpload(ctx context.Context, bucketName, objectName, uploadID string, parts []minio.CompletePart) error
+	AbortMultipartUpload(ctx context.Context, bucketName, objectName, uploadID string) error
 }
 
 // For redis queue
@@ -34,14 +38,14 @@ type Queuer interface {
 }
 
 type Handler struct {
-	minioService *service.MinioService
-	service      *service.RepoService
+	minioService MultipartService
+	service      ServiceRepository
 	logger       *slog.Logger
-	redisService *service.RedisService
+	redisService Queuer
 	// we will add the services here later
 }
 
-func NewHandler(minioService *service.MinioService, service *service.RepoService, redisService *service.RedisService, logger *slog.Logger) *Handler {
+func NewHandler(minioService MultipartService, service ServiceRepository, redisService Queuer, logger *slog.Logger) *Handler {
 	return &Handler{
 		minioService: minioService,
 		service:      service,
@@ -62,6 +66,10 @@ func NewHandler(minioService *service.MinioService, service *service.RepoService
 // @Failure 500 {object} models.ApiMessage "Internal server error"
 // @Router /upload/initiate [post]
 func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
+	// This initiates the whole flow from the frontend
+	// The frontend will call this endpoint to get the presigned URLs for each part,
+	//  then it will upload the parts directly to MinIO using those URLs. Once all parts are uploaded,
+	// the frontend will call the complete endpoint to finalize the upload and create the job in the database.
 	var req models.MultipartInitiateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.ApiMessage{
@@ -84,6 +92,8 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 	const (
 		minPartSize     = int64(5 * 1024 * 1024)
 		defaultPartSize = int64(64 * 1024 * 1024)
+		maxParts        = int64(10000) // S3/MinIO multipart hard limit
+		maxFileSize     = int64(5 * 1024 * 1024 * 1024 * 1024)
 	)
 	partSize := req.PartSize
 	if partSize == 0 {
@@ -97,9 +107,26 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 		})
 		return
 	}
+	if req.FileSize > maxFileSize {
+		c.JSON(http.StatusBadRequest, models.ApiMessage{
+			Success: false,
+			Message: "file_size exceeds 5TB limit",
+			Code:    400,
+		})
+		return
+	}
+	totalParts := (req.FileSize + partSize - 1) / partSize
+	if totalParts > maxParts {
+		c.JSON(http.StatusBadRequest, models.ApiMessage{
+			Success: false,
+			Message: "file_size/part_size creates too many parts (max 10000)",
+			Code:    400,
+		})
+		return
+	}
 
 	jobID := pkg.GenerateID()
-	_, err := h.service.CreateJob(c.Request.Context(), sqlc.CreateJobParams{JobID: jobID})
+	job, err := h.service.CreateJob(c.Request.Context(), sqlc.CreateJobParams{JobID: jobID})
 	if err != nil {
 		h.logger.Error("Failed to create job", "job_id", jobID, "error", err)
 		c.JSON(http.StatusInternalServerError, models.ApiMessage{
@@ -112,8 +139,11 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 	}
 
 	objectName := jobID
-	uploadID, err := h.minioService.NewMultipartUpload(c.Request.Context(), h.minioService.Cfg.UploadBucket, objectName)
+	uploadID, err := h.minioService.NewMultipartUpload(c.Request.Context(), h.minioService.UploadBucket(), objectName)
 	if err != nil {
+		if cleanupErr := h.service.DeleteJob(c.Request.Context(), job.ID); cleanupErr != nil {
+			h.logger.Error("Failed to cleanup job after upload init error", "job_id", jobID, "error", cleanupErr)
+		}
 		h.logger.Error("Failed to initiate multipart upload", "job_id", jobID, "error", err)
 		c.JSON(http.StatusInternalServerError, models.ApiMessage{
 			Success: false,
@@ -123,20 +153,38 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 		})
 		return
 	}
-
-	totalParts := int((req.FileSize + partSize - 1) / partSize)
-	urls := make([]map[string]any, 0, totalParts)
-
-	for partNumber := 1; partNumber <= totalParts; partNumber++ {
-		url, err := h.minioService.PresignedUploadPartURL(
+	// Important in case of failure from this point on to cleanup the multipart upload in MinIO and delete the job in our database,
+	// otherwise we'll have orphaned uploads and jobs that can never be completed.
+	cleanupFailedInitiation := func(cause error) {
+		abortErr := h.minioService.AbortMultipartUpload(
 			c.Request.Context(),
-			h.minioService.Cfg.UploadBucket,
+			h.minioService.UploadBucket(),
 			objectName,
 			uploadID,
-			partNumber,
+		)
+		if abortErr != nil {
+			h.logger.Error("Failed to abort multipart upload during cleanup", "job_id", jobID, "upload_id", uploadID, "error", abortErr)
+		}
+		deleteErr := h.service.DeleteJob(c.Request.Context(), job.ID)
+		if deleteErr != nil {
+			h.logger.Error("Failed to delete job during cleanup", "job_id", jobID, "error", deleteErr)
+		}
+		h.logger.Error("Initiation cleanup completed after failure", "job_id", jobID, "upload_id", uploadID, "cause", cause)
+	}
+
+	urls := make([]map[string]any, 0, int(totalParts))
+
+	for partNumber := int64(1); partNumber <= totalParts; partNumber++ {
+		url, err := h.minioService.PresignedUploadPartURL(
+			c.Request.Context(),
+			h.minioService.UploadBucket(),
+			objectName,
+			uploadID,
+			int(partNumber),
 			60*time.Minute,
 		)
 		if err != nil {
+			cleanupFailedInitiation(err)
 			h.logger.Error("Failed to create presigned part URL", "job_id", jobID, "part", partNumber, "error", err)
 			c.JSON(http.StatusInternalServerError, models.ApiMessage{
 				Success: false,
@@ -150,6 +198,7 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 		// Store presigned URL in database
 		_, err = h.service.CreatePresignedURL(c.Request.Context(), jobID, url, int32(partNumber))
 		if err != nil {
+			cleanupFailedInitiation(err)
 			h.logger.Error("Failed to store presigned URL", "job_id", jobID, "part", partNumber, "error", err)
 			c.JSON(http.StatusInternalServerError, models.ApiMessage{
 				Success: false,
@@ -161,7 +210,7 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 		}
 
 		urls = append(urls, map[string]any{
-			"part_number": partNumber,
+			"part_number": int(partNumber),
 			"url":         url,
 		})
 	}
@@ -234,7 +283,7 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 	objectName := req.JobID
 	if err := h.minioService.CompleteMultipartUpload(
 		c.Request.Context(),
-		h.minioService.Cfg.UploadBucket,
+		h.minioService.UploadBucket(),
 		objectName,
 		req.UploadID,
 		parts,
@@ -268,6 +317,18 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		})
 		return
 	}
+	// We update redis first and then our db. This way, if the redis enqueue fails, we won't have a job in the database that can never be processed because it was never enqueued.
+	err = h.redisService.Enqueue(c.Request.Context(), req.JobID)
+	if err != nil {
+		h.logger.Error("Failed to enqueue job in redis", "job_id", req.JobID, "error", err)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Success: false,
+			Message: "An error has occured while queuing the job for transcoding. Please contact support.",
+			Code:    500,
+			Error:   err.Error(),
+		})
+		return
+	}
 
 	_, err = h.service.UpdateJobStatus(c.Request.Context(), sqlc.UpdateJobStatusParams{
 		ID:     job.ID,
@@ -283,17 +344,6 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		})
 		return
 	}
-	err = h.redisService.Enqueue(c.Request.Context(), req.JobID)
-	if err != nil {
-		h.logger.Error("Failed to enqueue job in redis", "job_id", req.JobID, "error", err)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Success: false,
-			Message: "An error has occured while queuing the job for transcoding. Please contact support.",
-			Code:    500,
-			Error:   err.Error(),
-		})
-		return
-	}
 
 	c.JSON(http.StatusOK, models.ApiMessage{
 		Success: true,
@@ -301,8 +351,8 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		Code:    200,
 		Metadata: map[string]any{
 			"video_id": req.JobID,
-			// "video_id": meta.ID,
-			"status": "Currently queued for transcoding. It may take a few minutes.",
+			"filename": req.VideoName,
+			"status":   "Currently queued for transcoding. It may take a few minutes.",
 		},
 	})
 }

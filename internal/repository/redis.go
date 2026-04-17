@@ -28,8 +28,8 @@ func NewRedisRepo(cfg *config.RedisConfig, conn *connection.RedisClient) *RedisR
 }
 
 func (re *RedisRepo) AddtoStream(ctx context.Context, jobID string) error {
-	if err := re.conn.XGroupCreateMkStream(ctx, re.cfg.StreamName, re.cfg.GroupName, "$").Err(); err != nil {
-		return err
+	if re.cfg.StreamName == "" || re.cfg.GroupName == "" {
+		return fmt.Errorf("stream name and group name must be set in config")
 	}
 	_, err := re.conn.XAdd(ctx, &redis.XAddArgs{
 		Stream: re.cfg.StreamName,
@@ -51,7 +51,6 @@ func (re *RedisRepo) GetFromStream(ctx context.Context, workerID string) (string
 		Count:    1,
 	}).Result()
 	if err != nil {
-		// Handle redis.Nil specifically (timeout when Block > 0)
 		if errors.Is(err, redis.Nil) {
 			return "", "", nil
 		}
