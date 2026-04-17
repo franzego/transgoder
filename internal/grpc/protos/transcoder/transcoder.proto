@@ -1,0 +1,31 @@
+syntax = "proto3";
+package transcoder;
+option go_package = "./transcoder";
+
+service TranscoderService {
+  rpc TranscodeVideo(TranscodeRequest) returns (TranscodeResponse);
+//   rpc TranscodeVideoStream(stream Chunk) returns (TranscodeResponse);
+}
+
+message TranscodeRequest {
+  string input_path = 1; // the presignedurl for that particular video file in the MinIO bucket.
+  string output_path = 2;
+  string output_format = 3; // mp4, hls, etc.
+  VideoOptions options = 4;
+}
+
+message VideoOptions {
+  string resolution = 1; // e.g., 1920x1080
+  int32 bitrate = 3; // kbps
+  int32 framerate = 4;
+  string codec = 5; // h264, h265, vp9
+}
+
+message TranscodeResponse {
+  string job_id = 1;
+  string status = 2; // e.g., "pending", "in_progress", "completed", "failed"
+  bool success = 3;
+  string output_path = 4;
+  int64 duration_ms = 5;
+  string error_message = 6;
+}

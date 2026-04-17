@@ -40,25 +40,27 @@ INSERT INTO videometa (
 	format,
 	bitrate,
 	resolution,
+	codec,
+	framerate,
 	duration
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at;
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate;
 
 -- name: GetVideoMetaByID :one
-SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
+SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate
 FROM videometa
 WHERE id = $1
 FOR UPDATE;
 
 -- name: GetVideoMetaByJobID :one
-SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
+SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate
 FROM videometa
 WHERE job_id = $1
 FOR UPDATE;
 
 -- name: ListVideoMeta :many
-SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
+SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate
 FROM videometa
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
@@ -70,10 +72,12 @@ SET video_name = $2,
 	format = $4,
 	bitrate = $5,
 	resolution = $6,
-	duration = $7,
+	codec = $7,
+	framerate = $8,
+	duration = $9,
 	updated_at = NOW()
 WHERE id = $1
-RETURNING id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at;
+RETURNING id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate;
 
 -- name: DeleteVideoMeta :exec
 DELETE FROM videometa
@@ -93,4 +97,3 @@ ORDER BY part_number ASC;
 -- name: DeletePresignedURLsByJobID :exec
 DELETE FROM presigned_urls
 WHERE job_id = $1;
-

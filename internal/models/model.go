@@ -38,8 +38,8 @@ type MultipartCompleteRequest struct {
 	Parts       []MultipartUploadPart `json:"parts" binding:"required"`
 	VideoName   string                `json:"video_name"`
 	Description string                `json:"description"`
-	Format      string                `json:"format"`
-	Bitrate     *int32                `json:"bitrate"`
-	Resolution  string                `json:"resolution"`
+	Format      string                `json:"format" binding:"required"` //mp4 or mov
+	Codec       string                `json:"codec"`                     //h.264 or h.265
+	Framerate   *int32                `json:"framerate"`                 // 1920x1080
 	Duration    *int32                `json:"duration"`
 }

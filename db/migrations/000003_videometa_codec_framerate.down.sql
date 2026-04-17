@@ -1,0 +1,4 @@
+ALTER TABLE videometa
+DROP COLUMN IF EXISTS framerate,
+DROP COLUMN IF EXISTS codec;
+

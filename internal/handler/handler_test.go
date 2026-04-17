@@ -310,6 +310,12 @@ func TestCompleteMultipartUploadHandler_TransitionPendingToQueued(t *testing.T) 
 			if arg.JobID != "JB-123" {
 				t.Fatalf("expected video meta for JB-123, got %s", arg.JobID)
 			}
+			if !arg.Format.Valid || arg.Format.String != "mp4" {
+				t.Fatalf("expected required format mp4, got %+v", arg.Format)
+			}
+			if arg.Codec != "h264" {
+				t.Fatalf("expected default codec h264, got %+v", arg.Codec)
+			}
 			return sqlc.Videometum{}, nil
 		},
 		transitionToFn: func(_ context.Context, jobID string, from, to models.Status) error {
@@ -336,6 +342,7 @@ func TestCompleteMultipartUploadHandler_TransitionPendingToQueued(t *testing.T) 
 		},
 		"video_name":  "my_video.mp4",
 		"description": "test",
+		"format":      "mp4",
 	})
 
 	if w.Code != http.StatusOK {
@@ -377,6 +384,7 @@ func TestCompleteMultipartUploadHandler_TransitionFailureReturns500(t *testing.T
 			{"part_number": 1, "etag": "etag-1"},
 		},
 		"video_name": "my_video.mp4",
+		"format":     "mp4",
 	})
 
 	if w.Code != http.StatusInternalServerError {

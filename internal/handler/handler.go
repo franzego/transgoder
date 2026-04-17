@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/franzego/transgoder/internal/models"
@@ -298,13 +299,20 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 		return
 	}
 
+	codec := strings.TrimSpace(req.Codec)
+	if codec == "" {
+		codec = "h264"
+	}
+
 	_, err = h.service.CreateVideoMeta(c.Request.Context(), sqlc.CreateVideoMetaParams{
 		JobID:       job.JobID,
 		VideoName:   pkg.TextOrNull(req.VideoName),
 		Description: pkg.TextOrNull(req.Description),
 		Format:      pkg.TextOrNull(req.Format),
-		Bitrate:     pkg.IntOrNull(req.Bitrate),
-		Resolution:  pkg.TextOrNull(req.Resolution),
+		Bitrate:     pkg.IntOrNull(nil),
+		Resolution:  pkg.TextOrNull(""),
+		Codec:       codec,
+		Framerate:   pkg.IntOrNull(req.Framerate),
 		Duration:    pkg.IntOrNull(req.Duration),
 	})
 	if err != nil {
