@@ -49,7 +49,7 @@ func (r *RepoService) GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job
 }
 
 func (r *RepoService) UpdateJobStatus(ctx context.Context, arg sqlc.UpdateJobStatusParams) (sqlc.Job, error) {
-	if arg.ID == 0 {
+	if arg.JobID == "" {
 		return sqlc.Job{}, ErrInvalidJobID
 	}
 	job, err := r.repo.Q.UpdateJobStatus(ctx, arg)

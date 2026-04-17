@@ -138,7 +138,7 @@ func TestRepoService_CreateJob(t *testing.T) {
 
 func TestRepoService_UpdateJobStatus_Validation(t *testing.T) {
 	svc := buildRepoServiceWithDB(&fakeDB{})
-	_, err := svc.UpdateJobStatus(context.Background(), sqlc.UpdateJobStatusParams{ID: 0, Status: "done"})
+	_, err := svc.UpdateJobStatus(context.Background(), sqlc.UpdateJobStatusParams{JobID: "", Status: "done"})
 	if !errors.Is(err, ErrInvalidJobID) {
 		t.Fatalf("expected ErrInvalidJobID, got %v", err)
 	}
@@ -205,4 +205,3 @@ func TestRepoService_GetPresignedURLsByJobID_Validation(t *testing.T) {
 		t.Fatalf("expected ErrEmptyJobID, got %v", err)
 	}
 }
-

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/franzego/transgoder/internal/models"
 	"github.com/franzego/transgoder/internal/sqlc"
 	"github.com/gin-gonic/gin"
 	"github.com/minio/minio-go/v7"
@@ -21,9 +22,13 @@ type repoMock struct {
 	createJobFn          func(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error)
 	createPresignedURLFn func(ctx context.Context, jobID, presignedURL string, partNumber int32) (sqlc.PresignedUrl, error)
 	deleteJobFn          func(ctx context.Context, id int32) error
+	getJobByJobIDFn      func(ctx context.Context, jobID string) (sqlc.Job, error)
+	createVideoMetaFn    func(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error)
+	transitionToFn       func(ctx context.Context, jobID string, from, to models.Status) error
 	createJobCalls       int
 	createPresignedCalls int
 	deleteJobCalls       int
+	transitionToCalls    int
 }
 
 func (m *repoMock) CreateJob(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error) {
@@ -50,26 +55,38 @@ func (m *repoMock) DeleteJob(ctx context.Context, id int32) error {
 	return nil
 }
 
-func (m *repoMock) GetJobByJobID(context.Context, string) (sqlc.Job, error) {
+func (m *repoMock) GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error) {
+	if m.getJobByJobIDFn != nil {
+		return m.getJobByJobIDFn(ctx, jobID)
+	}
 	return sqlc.Job{}, errors.New("not implemented in this test")
 }
 
-func (m *repoMock) UpdateJobStatus(context.Context, sqlc.UpdateJobStatusParams) (sqlc.Job, error) {
-	return sqlc.Job{}, errors.New("not implemented in this test")
+func (m *repoMock) CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
+	if m.createVideoMetaFn != nil {
+		return m.createVideoMetaFn(ctx, arg)
+	}
+	return sqlc.Videometum{}, nil
 }
 
-func (m *repoMock) CreateVideoMeta(context.Context, sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
-	return sqlc.Videometum{}, errors.New("not implemented in this test")
+func (m *repoMock) TransitionTo(ctx context.Context, jobID string, from, to models.Status) error {
+	m.transitionToCalls++
+	if m.transitionToFn != nil {
+		return m.transitionToFn(ctx, jobID, from, to)
+	}
+	return nil
 }
 
 type minioMock struct {
 	uploadBucket     string
 	newUploadFn      func(ctx context.Context, bucketName, objectName string) (string, error)
 	presignPartURLFn func(ctx context.Context, bucketName, objectName, uploadID string, partNumber int, expires time.Duration) (string, error)
+	completeUploadFn func(ctx context.Context, bucketName, objectName, uploadID string, parts []minio.CompletePart) error
 	abortUploadFn    func(ctx context.Context, bucketName, objectName, uploadID string) error
 	newUploadCalls   int
 	presignPartCalls int
 	abortUploadCalls int
+	completeCalls    int
 }
 
 func (m *minioMock) UploadBucket() string {
@@ -92,8 +109,12 @@ func (m *minioMock) PresignedUploadPartURL(ctx context.Context, bucketName, obje
 	return "https://example.test/upload", nil
 }
 
-func (m *minioMock) CompleteMultipartUpload(context.Context, string, string, string, []minio.CompletePart) error {
-	return errors.New("not implemented in this test")
+func (m *minioMock) CompleteMultipartUpload(ctx context.Context, bucketName, objectName, uploadID string, parts []minio.CompletePart) error {
+	m.completeCalls++
+	if m.completeUploadFn != nil {
+		return m.completeUploadFn(ctx, bucketName, objectName, uploadID, parts)
+	}
+	return nil
 }
 
 func (m *minioMock) AbortMultipartUpload(ctx context.Context, bucketName, objectName, uploadID string) error {
@@ -104,17 +125,26 @@ func (m *minioMock) AbortMultipartUpload(ctx context.Context, bucketName, object
 	return nil
 }
 
-type redisMock struct{}
+type redisMock struct {
+	enqueueFn    func(ctx context.Context, jobID string) error
+	enqueueCalls int
+}
 
-func (m *redisMock) Enqueue(context.Context, string) error { return nil }
+func (m *redisMock) Enqueue(ctx context.Context, jobID string) error {
+	m.enqueueCalls++
+	if m.enqueueFn != nil {
+		return m.enqueueFn(ctx, jobID)
+	}
+	return nil
+}
 func (m *redisMock) Dequeue(context.Context, string) (string, string, error) {
 	return "", "", nil
 }
 
-func newTestHandler(repo ServiceRepository, minio MultipartService) *Handler {
+func newTestHandler(repo ServiceRepository, minio MultipartService, redis Queuer) *Handler {
 	gin.SetMode(gin.TestMode)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewHandler(minio, repo, &redisMock{}, logger)
+	return NewHandler(minio, repo, redis, logger)
 }
 
 func performInitiate(t *testing.T, h *Handler, payload map[string]any) *httptest.ResponseRecorder {
@@ -132,6 +162,21 @@ func performInitiate(t *testing.T, h *Handler, payload map[string]any) *httptest
 	return w
 }
 
+func performComplete(t *testing.T, h *Handler, payload map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/upload/complete", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	h.CompleteMultipartUploadHandler(c)
+	return w
+}
+
 func TestInitiateMultipartUploadHandler_NewMultipartUploadFailureCleansUpJob(t *testing.T) {
 	repo := &repoMock{
 		createJobFn: func(_ context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error) {
@@ -144,7 +189,7 @@ func TestInitiateMultipartUploadHandler_NewMultipartUploadFailureCleansUpJob(t *
 			return "", errors.New("minio unavailable")
 		},
 	}
-	h := newTestHandler(repo, minioSvc)
+	h := newTestHandler(repo, minioSvc, &redisMock{})
 	w := performInitiate(t, h, map[string]any{
 		"file_name": "video.mp4",
 		"file_size": 6 * 1024 * 1024,
@@ -179,7 +224,7 @@ func TestInitiateMultipartUploadHandler_PresignFailureAbortsAndDeletes(t *testin
 			return "https://example.test/upload/part", nil
 		},
 	}
-	h := newTestHandler(repo, minioSvc)
+	h := newTestHandler(repo, minioSvc, &redisMock{})
 	w := performInitiate(t, h, map[string]any{
 		"file_name": "video.mp4",
 		"file_size": 11 * 1024 * 1024,
@@ -215,7 +260,7 @@ func TestInitiateMultipartUploadHandler_CreatePresignedURLFailureAbortsAndDelete
 			return "upload-2", nil
 		},
 	}
-	h := newTestHandler(repo, minioSvc)
+	h := newTestHandler(repo, minioSvc, &redisMock{})
 	w := performInitiate(t, h, map[string]any{
 		"file_name": "video.mp4",
 		"file_size": 6 * 1024 * 1024,
@@ -236,7 +281,7 @@ func TestInitiateMultipartUploadHandler_CreatePresignedURLFailureAbortsAndDelete
 func TestInitiateMultipartUploadHandler_RejectsTooManyParts(t *testing.T) {
 	repo := &repoMock{}
 	minioSvc := &minioMock{uploadBucket: "uploads"}
-	h := newTestHandler(repo, minioSvc)
+	h := newTestHandler(repo, minioSvc, &redisMock{})
 
 	tooMany := int64(10001 * 5 * 1024 * 1024)
 	w := performInitiate(t, h, map[string]any{
@@ -253,5 +298,91 @@ func TestInitiateMultipartUploadHandler_RejectsTooManyParts(t *testing.T) {
 	}
 	if minioSvc.newUploadCalls != 0 {
 		t.Fatalf("expected NewMultipartUpload not called for invalid size, got %d", minioSvc.newUploadCalls)
+	}
+}
+
+func TestCompleteMultipartUploadHandler_TransitionPendingToQueued(t *testing.T) {
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{JobID: "JB-123"}, nil
+		},
+		createVideoMetaFn: func(_ context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
+			if arg.JobID != "JB-123" {
+				t.Fatalf("expected video meta for JB-123, got %s", arg.JobID)
+			}
+			return sqlc.Videometum{}, nil
+		},
+		transitionToFn: func(_ context.Context, jobID string, from, to models.Status) error {
+			if jobID != "JB-123" {
+				t.Fatalf("expected transition for JB-123, got %s", jobID)
+			}
+			if from != models.StatusPending || to != models.StatusQueued {
+				t.Fatalf("unexpected transition: %s -> %s", from, to)
+			}
+			return nil
+		},
+	}
+	minioSvc := &minioMock{
+		uploadBucket: "uploads",
+	}
+	redisSvc := &redisMock{}
+	h := newTestHandler(repo, minioSvc, redisSvc)
+
+	w := performComplete(t, h, map[string]any{
+		"job_id":    "JB-123",
+		"upload_id": "upload-1",
+		"parts": []map[string]any{
+			{"part_number": 1, "etag": "etag-1"},
+		},
+		"video_name":  "my_video.mp4",
+		"description": "test",
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if repo.transitionToCalls != 1 {
+		t.Fatalf("expected TransitionTo called once, got %d", repo.transitionToCalls)
+	}
+	if redisSvc.enqueueCalls != 1 {
+		t.Fatalf("expected Enqueue called once, got %d", redisSvc.enqueueCalls)
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"filename":"my_video.mp4"`)) {
+		t.Fatalf("expected filename in response body, got %s", w.Body.String())
+	}
+}
+
+func TestCompleteMultipartUploadHandler_TransitionFailureReturns500(t *testing.T) {
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{JobID: "JB-321"}, nil
+		},
+		createVideoMetaFn: func(_ context.Context, _ sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
+			return sqlc.Videometum{}, nil
+		},
+		transitionToFn: func(_ context.Context, _ string, _ models.Status, _ models.Status) error {
+			return errors.New("invalid status transition")
+		},
+	}
+	minioSvc := &minioMock{
+		uploadBucket: "uploads",
+	}
+	redisSvc := &redisMock{}
+	h := newTestHandler(repo, minioSvc, redisSvc)
+
+	w := performComplete(t, h, map[string]any{
+		"job_id":    "JB-321",
+		"upload_id": "upload-1",
+		"parts": []map[string]any{
+			{"part_number": 1, "etag": "etag-1"},
+		},
+		"video_name": "my_video.mp4",
+	})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"Failed to update job status"`)) {
+		t.Fatalf("expected transition failure response, got %s", w.Body.String())
 	}
 }
