@@ -1,6 +1,6 @@
 syntax = "proto3";
 package transcoder;
-option go_package = "./transcoder";
+option go_package = "github.com/franzego/transgoder/grpc/server";
 
 service TranscoderService {
   rpc TranscodeVideo(TranscodeRequest) returns (TranscodeResponse);
