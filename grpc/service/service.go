@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/franzego/transcoder/grpc/connection"
 	pb "github.com/franzego/transcoder/grpc/server"
-	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type TranscoderService struct {
 	pb.UnimplementedTranscoderServiceServer
-	Redis *redis.Client
+	Redis *connection.RedisClient
 }
 
 func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.TranscodeRequest) (*pb.TranscodeResponse, error) {
