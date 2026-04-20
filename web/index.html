@@ -331,6 +331,7 @@
                 showStatus('Please select a video file', 'error');
                 return;
             }
+            const inferredFormat = (selectedFile.name.split('.').pop() || 'mp4').toLowerCase();
 
             document.getElementById('uploadBtn').disabled = true;
 
@@ -390,6 +391,7 @@
                         parts: uploadState.etags,
                         video_name: document.getElementById('videoName').value,
                         description: document.getElementById('description').value,
+                        format: inferredFormat,
                         duration: null
                     })
                 });

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/franzego/transgoder/internal/models"
 	"github.com/franzego/transgoder/internal/repository"
 	"github.com/franzego/transgoder/internal/sqlc"
 )
@@ -18,9 +19,12 @@ func NewRepoService(repo *repository.Repo) *RepoService {
 	}
 }
 
-func (r *RepoService) CreateJob(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error) {
-	if arg.JobID == "" {
+func (r *RepoService) CreateJob(ctx context.Context, jobID string) (sqlc.Job, error) {
+	if jobID == "" {
 		return sqlc.Job{}, ErrInvalidJobID
+	}
+	arg := sqlc.CreateJobParams{
+		JobID: jobID,
 	}
 	job, err := r.repo.Q.CreateJob(ctx, arg)
 	if err != nil {
@@ -63,11 +67,29 @@ func (r *RepoService) UpdateJobStatus(ctx context.Context, arg sqlc.UpdateJobSta
 	return job, nil
 }
 
-func (r *RepoService) CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
+func (r *RepoService) CreateVideoMeta(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error) {
 	if arg.JobID == "" {
 		return sqlc.Videometum{}, ErrInvalidJobID
 	}
-	item, err := r.repo.Q.CreateVideoMeta(ctx, arg)
+	if arg.VideoName.String == "" || arg.Format.String == "" || arg.Codec == "" {
+		return sqlc.Videometum{}, &ServiceError{
+			Err:     fmt.Errorf("missing required video metadata fields"),
+			Code:    400,
+			Message: "missing required video metadata fields",
+		}
+	}
+	metaData := sqlc.CreateVideoMetaParams{
+		JobID:       arg.JobID,
+		VideoName:   arg.VideoName,
+		Description: arg.Description,
+		Format:      arg.Format,
+		Bitrate:     arg.Bitrate,
+		Resolution:  arg.Resolution,
+		Codec:       arg.Codec,
+		Framerate:   arg.Framerate,
+		Duration:    arg.Duration,
+	}
+	item, err := r.repo.Q.CreateVideoMeta(ctx, metaData)
 	if err != nil {
 		return sqlc.Videometum{}, &ServiceError{
 			Err:     err,

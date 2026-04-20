@@ -68,10 +68,12 @@ INSERT INTO videometa (
 	format,
 	bitrate,
 	resolution,
+	codec,
+	framerate,
 	duration
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate
 `
 
 type CreateVideoMetaParams struct {
@@ -81,6 +83,8 @@ type CreateVideoMetaParams struct {
 	Format      pgtype.Text `json:"format"`
 	Bitrate     pgtype.Int4 `json:"bitrate"`
 	Resolution  pgtype.Text `json:"resolution"`
+	Codec       string      `json:"codec"`
+	Framerate   pgtype.Int4 `json:"framerate"`
 	Duration    pgtype.Int4 `json:"duration"`
 }
 
@@ -92,6 +96,8 @@ func (q *Queries) CreateVideoMeta(ctx context.Context, arg CreateVideoMetaParams
 		arg.Format,
 		arg.Bitrate,
 		arg.Resolution,
+		arg.Codec,
+		arg.Framerate,
 		arg.Duration,
 	)
 	var i Videometum
@@ -106,6 +112,8 @@ func (q *Queries) CreateVideoMeta(ctx context.Context, arg CreateVideoMetaParams
 		&i.Duration,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Codec,
+		&i.Framerate,
 	)
 	return i, err
 }
@@ -214,7 +222,7 @@ func (q *Queries) GetPresignedURLsByJobID(ctx context.Context, jobID string) ([]
 }
 
 const getVideoMetaByID = `-- name: GetVideoMetaByID :one
-SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
+SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate
 FROM videometa
 WHERE id = $1
 FOR UPDATE
@@ -234,12 +242,14 @@ func (q *Queries) GetVideoMetaByID(ctx context.Context, id int32) (Videometum, e
 		&i.Duration,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Codec,
+		&i.Framerate,
 	)
 	return i, err
 }
 
 const getVideoMetaByJobID = `-- name: GetVideoMetaByJobID :one
-SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
+SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate
 FROM videometa
 WHERE job_id = $1
 FOR UPDATE
@@ -259,6 +269,8 @@ func (q *Queries) GetVideoMetaByJobID(ctx context.Context, jobID string) (Videom
 		&i.Duration,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Codec,
+		&i.Framerate,
 	)
 	return i, err
 }
@@ -302,7 +314,7 @@ func (q *Queries) ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, erro
 }
 
 const listVideoMeta = `-- name: ListVideoMeta :many
-SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
+SELECT id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate
 FROM videometa
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -333,6 +345,8 @@ func (q *Queries) ListVideoMeta(ctx context.Context, arg ListVideoMetaParams) ([
 			&i.Duration,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Codec,
+			&i.Framerate,
 		); err != nil {
 			return nil, err
 		}
@@ -377,10 +391,12 @@ SET video_name = $2,
 	format = $4,
 	bitrate = $5,
 	resolution = $6,
-	duration = $7,
+	codec = $7,
+	framerate = $8,
+	duration = $9,
 	updated_at = NOW()
 WHERE id = $1
-RETURNING id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at
+RETURNING id, job_id, video_name, description, format, bitrate, resolution, duration, created_at, updated_at, codec, framerate
 `
 
 type UpdateVideoMetaParams struct {
@@ -390,6 +406,8 @@ type UpdateVideoMetaParams struct {
 	Format      pgtype.Text `json:"format"`
 	Bitrate     pgtype.Int4 `json:"bitrate"`
 	Resolution  pgtype.Text `json:"resolution"`
+	Codec       string      `json:"codec"`
+	Framerate   pgtype.Int4 `json:"framerate"`
 	Duration    pgtype.Int4 `json:"duration"`
 }
 
@@ -401,6 +419,8 @@ func (q *Queries) UpdateVideoMeta(ctx context.Context, arg UpdateVideoMetaParams
 		arg.Format,
 		arg.Bitrate,
 		arg.Resolution,
+		arg.Codec,
+		arg.Framerate,
 		arg.Duration,
 	)
 	var i Videometum
@@ -415,6 +435,8 @@ func (q *Queries) UpdateVideoMeta(ctx context.Context, arg UpdateVideoMetaParams
 		&i.Duration,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Codec,
+		&i.Framerate,
 	)
 	return i, err
 }

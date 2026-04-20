@@ -19,11 +19,11 @@ import (
 )
 
 type repoMock struct {
-	createJobFn          func(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error)
+	createJobFn          func(ctx context.Context, jobID string) (sqlc.Job, error)
 	createPresignedURLFn func(ctx context.Context, jobID, presignedURL string, partNumber int32) (sqlc.PresignedUrl, error)
 	deleteJobFn          func(ctx context.Context, id int32) error
 	getJobByJobIDFn      func(ctx context.Context, jobID string) (sqlc.Job, error)
-	createVideoMetaFn    func(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error)
+	createVideoMetaFn    func(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error)
 	transitionToFn       func(ctx context.Context, jobID string, from, to models.Status) error
 	createJobCalls       int
 	createPresignedCalls int
@@ -31,10 +31,10 @@ type repoMock struct {
 	transitionToCalls    int
 }
 
-func (m *repoMock) CreateJob(ctx context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error) {
+func (m *repoMock) CreateJob(ctx context.Context, jobID string) (sqlc.Job, error) {
 	m.createJobCalls++
 	if m.createJobFn != nil {
-		return m.createJobFn(ctx, arg)
+		return m.createJobFn(ctx, jobID)
 	}
 	return sqlc.Job{}, nil
 }
@@ -62,7 +62,7 @@ func (m *repoMock) GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, e
 	return sqlc.Job{}, errors.New("not implemented in this test")
 }
 
-func (m *repoMock) CreateVideoMeta(ctx context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
+func (m *repoMock) CreateVideoMeta(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error) {
 	if m.createVideoMetaFn != nil {
 		return m.createVideoMetaFn(ctx, arg)
 	}
@@ -179,8 +179,8 @@ func performComplete(t *testing.T, h *Handler, payload map[string]any) *httptest
 
 func TestInitiateMultipartUploadHandler_NewMultipartUploadFailureCleansUpJob(t *testing.T) {
 	repo := &repoMock{
-		createJobFn: func(_ context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error) {
-			return sqlc.Job{ID: 77, JobID: arg.JobID}, nil
+		createJobFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{ID: 77, JobID: jobID}, nil
 		},
 	}
 	minioSvc := &minioMock{
@@ -208,8 +208,8 @@ func TestInitiateMultipartUploadHandler_NewMultipartUploadFailureCleansUpJob(t *
 
 func TestInitiateMultipartUploadHandler_PresignFailureAbortsAndDeletes(t *testing.T) {
 	repo := &repoMock{
-		createJobFn: func(_ context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error) {
-			return sqlc.Job{ID: 42, JobID: arg.JobID}, nil
+		createJobFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{ID: 42, JobID: jobID}, nil
 		},
 	}
 	minioSvc := &minioMock{
@@ -247,8 +247,8 @@ func TestInitiateMultipartUploadHandler_PresignFailureAbortsAndDeletes(t *testin
 
 func TestInitiateMultipartUploadHandler_CreatePresignedURLFailureAbortsAndDeletes(t *testing.T) {
 	repo := &repoMock{
-		createJobFn: func(_ context.Context, arg sqlc.CreateJobParams) (sqlc.Job, error) {
-			return sqlc.Job{ID: 10, JobID: arg.JobID}, nil
+		createJobFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{ID: 10, JobID: jobID}, nil
 		},
 		createPresignedURLFn: func(context.Context, string, string, int32) (sqlc.PresignedUrl, error) {
 			return sqlc.PresignedUrl{}, errors.New("db insert failed")
@@ -306,9 +306,15 @@ func TestCompleteMultipartUploadHandler_TransitionPendingToQueued(t *testing.T) 
 		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
 			return sqlc.Job{JobID: "JB-123"}, nil
 		},
-		createVideoMetaFn: func(_ context.Context, arg sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
+		createVideoMetaFn: func(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error) {
 			if arg.JobID != "JB-123" {
 				t.Fatalf("expected video meta for JB-123, got %s", arg.JobID)
+			}
+			if !arg.Format.Valid || arg.Format.String != "mp4" {
+				t.Fatalf("expected required format mp4, got %+v", arg.Format)
+			}
+			if arg.Codec != "h264" {
+				t.Fatalf("expected default codec h264, got %+v", arg.Codec)
 			}
 			return sqlc.Videometum{}, nil
 		},
@@ -336,6 +342,7 @@ func TestCompleteMultipartUploadHandler_TransitionPendingToQueued(t *testing.T) 
 		},
 		"video_name":  "my_video.mp4",
 		"description": "test",
+		"format":      "mp4",
 	})
 
 	if w.Code != http.StatusOK {
@@ -357,7 +364,7 @@ func TestCompleteMultipartUploadHandler_TransitionFailureReturns500(t *testing.T
 		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
 			return sqlc.Job{JobID: "JB-321"}, nil
 		},
-		createVideoMetaFn: func(_ context.Context, _ sqlc.CreateVideoMetaParams) (sqlc.Videometum, error) {
+		createVideoMetaFn: func(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error) {
 			return sqlc.Videometum{}, nil
 		},
 		transitionToFn: func(_ context.Context, _ string, _ models.Status, _ models.Status) error {
@@ -377,6 +384,7 @@ func TestCompleteMultipartUploadHandler_TransitionFailureReturns500(t *testing.T
 			{"part_number": 1, "etag": "etag-1"},
 		},
 		"video_name": "my_video.mp4",
+		"format":     "mp4",
 	})
 
 	if w.Code != http.StatusInternalServerError {

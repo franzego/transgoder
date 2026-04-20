@@ -35,4 +35,6 @@ type Videometum struct {
 	Duration    pgtype.Int4        `json:"duration"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Codec       string             `json:"codec"`
+	Framerate   pgtype.Int4        `json:"framerate"`
 }
