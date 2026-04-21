@@ -95,8 +95,9 @@ func (wp *Workerpool) Run(ctx context.Context, jobcount, resultCount int) {
 	}()
 
 	var workWg sync.WaitGroup
-	workWg.Add(1)
+
 	for i := 1; i <= wp.workers; i++ {
+		workWg.Add(1)
 		go service.Worker(ctx, i, jobChan, resultChan, wp.processor, &workWg)
 	}
 	go func() {
