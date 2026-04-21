@@ -1,3 +1,4 @@
+// Package models contains the data models for the transcoder service.
 package models
 
 import "github.com/jackc/pgx/v5/pgtype"
@@ -9,11 +10,16 @@ const (
 	StatusQueued      Status = "queued"
 	StatusDownloading Status = "downloading"
 	StatusProcessing  Status = "processing"
-	StatusUploading   Status = "uploading" //after transcoding has been done, we upload back to minio
+	StatusUploading   Status = "uploading" // after transcoding has been done, we upload back to minio
 	StatusCompleted   Status = "completed"
 	StatusFailed      Status = "failed"
 	StatusCancelled   Status = "cancelled"
 )
+
+type UpdateStatusRequest struct {
+	From Status `json:"from" validate:"required,oneof=pending queued downloading processing uploading completed failed cancelled"`
+	To   Status `json:"to" validate:"required,oneof=pending queued downloading processing uploading completed failed cancelled"`
+}
 
 type ApiMessage struct {
 	Success  bool   `json:"success"`
@@ -21,6 +27,9 @@ type ApiMessage struct {
 	Code     int    `json:"code"`
 	Error    string `json:"error,omitempty"`
 	Metadata any    `json:"metadata,omitempty"`
+}
+type JobStatusResponse struct {
+	Status string `json:"status"`
 }
 
 type MultipartInitiateRequest struct {
@@ -40,8 +49,8 @@ type MultipartCompleteRequest struct {
 	Parts       []MultipartUploadPart `json:"parts" binding:"required"`
 	VideoName   string                `json:"video_name"`
 	Description string                `json:"description"`
-	Format      string                `json:"format" binding:"required"` //mp4 or mov
-	Codec       string                `json:"codec"`                     //h.264 or h.265
+	Format      string                `json:"format" binding:"required"` // mp4 or mov
+	Codec       string                `json:"codec"`                     // h.264 or h.265
 	Framerate   *int32                `json:"framerate"`                 // 1920x1080
 	Duration    *int32                `json:"duration"`
 }

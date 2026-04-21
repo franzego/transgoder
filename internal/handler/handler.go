@@ -13,6 +13,7 @@ import (
 	"github.com/franzego/transgoder/internal/sqlc"
 	"github.com/franzego/transgoder/pkg"
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/minio/minio-go/v7"
 )
 
@@ -45,15 +46,17 @@ type Handler struct {
 	service      ServiceRepository
 	logger       *slog.Logger
 	redisService Queuer
+	validator    *validator.Validate
 	// we will add the services here later
 }
 
-func NewHandler(minioService MultipartService, service ServiceRepository, redisService Queuer, logger *slog.Logger) *Handler {
+func NewHandler(minioService MultipartService, service ServiceRepository, redisService Queuer, logger *slog.Logger, validator *validator.Validate) *Handler {
 	return &Handler{
 		minioService: minioService,
 		service:      service,
 		logger:       logger,
 		redisService: redisService,
+		validator:    validator,
 	}
 }
 

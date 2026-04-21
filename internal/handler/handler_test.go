@@ -14,7 +14,9 @@ import (
 
 	"github.com/franzego/transgoder/internal/models"
 	"github.com/franzego/transgoder/internal/sqlc"
+	"github.com/franzego/transgoder/pkg"
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/minio/minio-go/v7"
 )
 
@@ -135,8 +137,10 @@ func (m *redisMock) Enqueue(ctx context.Context, jobID string) error {
 	if m.enqueueFn != nil {
 		return m.enqueueFn(ctx, jobID)
 	}
+
 	return nil
 }
+
 func (m *redisMock) Dequeue(context.Context, string) (string, string, error) {
 	return "", "", nil
 }
@@ -144,7 +148,9 @@ func (m *redisMock) Dequeue(context.Context, string) (string, string, error) {
 func newTestHandler(repo ServiceRepository, minio MultipartService, redis Queuer) *Handler {
 	gin.SetMode(gin.TestMode)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewHandler(minio, repo, redis, logger)
+	validate := validator.New()
+	pkg.RegisterCustomValidations(validate)
+	return NewHandler(minio, repo, redis, logger, validate)
 }
 
 func performInitiate(t *testing.T, h *Handler, payload map[string]any) *httptest.ResponseRecorder {
@@ -174,6 +180,33 @@ func performComplete(t *testing.T, h *Handler, payload map[string]any) *httptest
 	c, _ := gin.CreateTestContext(w)
 	c.Request = req
 	h.CompleteMultipartUploadHandler(c)
+	return w
+}
+
+func performUpdateStatus(t *testing.T, h *Handler, jobID string, payload map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/status/"+jobID+"/update", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: jobID}}
+	h.UpdateStatus(c)
+	return w
+}
+
+func performGetJobStatus(t *testing.T, h *Handler, jobID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/status/"+jobID+"/update", nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: jobID}}
+	h.GetJobStatus(c)
 	return w
 }
 
@@ -392,5 +425,97 @@ func TestCompleteMultipartUploadHandler_TransitionFailureReturns500(t *testing.T
 	}
 	if !bytes.Contains(w.Body.Bytes(), []byte(`"Failed to update job status"`)) {
 		t.Fatalf("expected transition failure response, got %s", w.Body.String())
+	}
+}
+
+func TestUpdateStatus_Success(t *testing.T) {
+	repo := &repoMock{
+		transitionToFn: func(_ context.Context, jobID string, from, to models.Status) error {
+			if jobID != "JB-987" {
+				t.Fatalf("expected JB-987, got %s", jobID)
+			}
+			if from != models.StatusPending || to != models.StatusQueued {
+				t.Fatalf("unexpected transition: %s -> %s", from, to)
+			}
+			return nil
+		},
+	}
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	w := performUpdateStatus(t, h, "JB-987", map[string]any{
+		"from": "pending",
+		"to":   "queued",
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if repo.transitionToCalls != 1 {
+		t.Fatalf("expected TransitionTo called once, got %d", repo.transitionToCalls)
+	}
+}
+
+func TestUpdateStatus_ValidationFailureReturns400(t *testing.T) {
+	repo := &repoMock{}
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	w := performUpdateStatus(t, h, "JB-111", map[string]any{
+		"from": "pending",
+	})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if repo.transitionToCalls != 0 {
+		t.Fatalf("expected TransitionTo not called, got %d", repo.transitionToCalls)
+	}
+}
+
+func TestUpdateStatus_TransitionFailureReturns500(t *testing.T) {
+	repo := &repoMock{
+		transitionToFn: func(_ context.Context, _ string, _ models.Status, _ models.Status) error {
+			return errors.New("invalid transition")
+		},
+	}
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	w := performUpdateStatus(t, h, "JB-112", map[string]any{
+		"from": "pending",
+		"to":   "failed",
+	})
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetJobStatus_Success(t *testing.T) {
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			if jobID != "JB-700" {
+				t.Fatalf("expected JB-700, got %s", jobID)
+			}
+			return sqlc.Job{JobID: jobID, Status: "processing"}, nil
+		},
+	}
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	w := performGetJobStatus(t, h, "JB-700")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"status":"processing"`)) {
+		t.Fatalf("expected processing status in response, got %s", w.Body.String())
+	}
+}
+
+func TestGetJobStatus_FailureReturns500(t *testing.T) {
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, _ string) (sqlc.Job, error) {
+			return sqlc.Job{}, errors.New("db unavailable")
+		},
+	}
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	w := performGetJobStatus(t, h, "JB-701")
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
 	}
 }

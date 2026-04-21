@@ -121,3 +121,26 @@ func TestWorkerPropagatesTranscodeError(t *testing.T) {
 		t.Fatalf("expected 1 transcode call, got %d", transcoder.CallCount())
 	}
 }
+
+func TestWorkerStopsWhenContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	jobs := make(chan repository.JobStuff)
+	results := make(chan WorkerResult, 1)
+	transcoder := &fakeTranscoder{}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go Worker(ctx, 1, jobs, results, transcoder, &wg)
+
+	wg.Wait()
+	close(results)
+
+	if transcoder.CallCount() != 0 {
+		t.Fatalf("expected no transcode calls after cancellation, got %d", transcoder.CallCount())
+	}
+	if _, ok := <-results; ok {
+		t.Fatal("expected no results after cancellation")
+	}
+}
