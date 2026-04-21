@@ -31,9 +31,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer redisClient.Close()
-
-	transcoderService := &service.TranscoderService{Redis: redisClient}
 	redisRepo := repository.NewRedisRepo(&cfg.Redis, redisClient)
+	transcoderService := service.NewTranscoderService(logger, redisClient)
+
 	workerPool := worker.NewWorkerPool(cfg.Worker.Count, redisRepo, transcoderService)
 	if workerPool == nil {
 		slog.Error("failed to initialize worker pool")
@@ -43,7 +43,7 @@ func main() {
 
 	gs := grpc.NewServer()
 	pb.RegisterTranscoderServiceServer(gs, transcoderService)
-	reflection.Register(gs)
+	reflection.Register(gs) // need to disable in production
 
 	l, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Server.Port))
 	if err != nil {
