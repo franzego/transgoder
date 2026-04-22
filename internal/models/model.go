@@ -17,8 +17,9 @@ const (
 )
 
 type UpdateStatusRequest struct {
-	From Status `json:"from" validate:"required,oneof=pending queued downloading processing uploading completed failed cancelled"`
-	To   Status `json:"to" validate:"required,oneof=pending queued downloading processing uploading completed failed cancelled"`
+	JobID string `json:"id" validate:"required"`
+	From  Status `json:"from" validate:"required,oneof=pending queued downloading processing uploading completed failed cancelled"`
+	To    Status `json:"to" validate:"required,oneof=pending queued downloading processing uploading completed failed cancelled"`
 }
 
 type ApiMessage struct {

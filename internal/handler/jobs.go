@@ -41,8 +41,7 @@ func (h *Handler) UpdateStatus(c *gin.Context) {
 		})
 		return
 	}
-	jobID := c.Param("id")
-	if err := h.service.TransitionTo(c, jobID, req.From, req.To); err != nil {
+	if err := h.service.TransitionTo(c, req.JobID, req.From, req.To); err != nil {
 		h.logger.Error("failed to transition status", "error", err)
 		c.JSON(http.StatusInternalServerError, models.ApiMessage{
 			Message: fmt.Sprintf("Failed to transition status: %s -> %s", req.From, req.To),
@@ -84,5 +83,48 @@ func (h *Handler) GetJobStatus(c *gin.Context) {
 		Success:  true,
 		Code:     http.StatusOK,
 		Metadata: models.JobStatusResponse{Status: job.Status},
+	})
+}
+
+// GetSourceVideoURL godoc
+// @Summary Get source video URL
+// @Description Retrieve a presigned GET URL for a job's uploaded source video
+// @Tags jobs
+// @Produce json
+// @Param id path string true "Job ID"
+// @Success 200 {object} models.ApiMessage "Source URL retrieved successfully"
+// @Failure 500 {object} models.ApiMessage "Internal server error"
+// @Router /jobs/{id}/source-url [get]
+func (h *Handler) GetSourceVideoURL(c *gin.Context) {
+	jobID := c.Param("id")
+	if _, err := h.service.GetJobByJobID(c, jobID); err != nil {
+		h.logger.Error("failed to get job", "error", err, "job_id", jobID)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Failed to get job",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	sourceURL, err := h.minioService.GetPresignedURL(c.Request.Context(), h.minioService.UploadBucket(), jobID)
+	if err != nil {
+		h.logger.Error("failed to generate source presigned url", "error", err, "job_id", jobID)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Failed to generate source URL",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.ApiMessage{
+		Message: "Source URL retrieved successfully",
+		Success: true,
+		Code:    http.StatusOK,
+		Metadata: map[string]any{
+			"job_id":     jobID,
+			"source_url": sourceURL,
+		},
 	})
 }

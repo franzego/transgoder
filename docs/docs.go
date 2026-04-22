@@ -15,6 +15,41 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/jobs/{id}/source-url": {
+            "get": {
+                "description": "Retrieve a presigned GET URL for a job's uploaded source video",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Get source video URL",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Source URL retrieved successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    }
+                }
+            }
+        },
         "/status/{id}/update": {
             "get": {
                 "description": "Retrieve the current status for a job",
@@ -329,6 +364,7 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "from",
+                "id",
                 "to"
             ],
             "properties": {
@@ -348,6 +384,9 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.Status"
                         }
                     ]
+                },
+                "id": {
+                    "type": "string"
                 },
                 "to": {
                     "enum": [

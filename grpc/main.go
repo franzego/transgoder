@@ -12,6 +12,7 @@ import (
 	"github.com/franzego/transcoder/grpc/repository"
 	pb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transcoder/grpc/service"
+	"github.com/franzego/transcoder/grpc/webserver"
 	"github.com/franzego/transcoder/grpc/worker"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -32,7 +33,8 @@ func main() {
 	}
 	defer redisClient.Close()
 	redisRepo := repository.NewRedisRepo(&cfg.Redis, redisClient)
-	transcoderService := service.NewTranscoderService(logger, redisClient)
+	webClient := webserver.NewWebserverClient(cfg)
+	transcoderService := service.NewTranscoderService(logger, webClient, cfg.FFmpeg.Path)
 
 	workerPool := worker.NewWorkerPool(cfg.Worker.Count, redisRepo, transcoderService)
 	if workerPool == nil {

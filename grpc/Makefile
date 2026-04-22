@@ -14,3 +14,6 @@ test:
 
 test-v:
 	go test -v ./...
+
+tidy:
+	go mod tidy

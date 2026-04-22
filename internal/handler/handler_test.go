@@ -81,6 +81,7 @@ func (m *repoMock) TransitionTo(ctx context.Context, jobID string, from, to mode
 
 type minioMock struct {
 	uploadBucket     string
+	getPresignedFn   func(ctx context.Context, bucketName, jobID string) (string, error)
 	newUploadFn      func(ctx context.Context, bucketName, objectName string) (string, error)
 	presignPartURLFn func(ctx context.Context, bucketName, objectName, uploadID string, partNumber int, expires time.Duration) (string, error)
 	completeUploadFn func(ctx context.Context, bucketName, objectName, uploadID string, parts []minio.CompletePart) error
@@ -93,6 +94,13 @@ type minioMock struct {
 
 func (m *minioMock) UploadBucket() string {
 	return m.uploadBucket
+}
+
+func (m *minioMock) GetPresignedURL(ctx context.Context, bucketName, jobID string) (string, error) {
+	if m.getPresignedFn != nil {
+		return m.getPresignedFn(ctx, bucketName, jobID)
+	}
+	return "https://example.test/source.mp4", nil
 }
 
 func (m *minioMock) NewMultipartUpload(ctx context.Context, bucketName, objectName string) (string, error) {
@@ -207,6 +215,17 @@ func performGetJobStatus(t *testing.T, h *Handler, jobID string) *httptest.Respo
 	c.Request = req
 	c.Params = gin.Params{{Key: "id", Value: jobID}}
 	h.GetJobStatus(c)
+	return w
+}
+
+func performGetSourceURL(t *testing.T, h *Handler, jobID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+jobID+"/source-url", nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: jobID}}
+	h.GetSourceVideoURL(c)
 	return w
 }
 
@@ -442,6 +461,7 @@ func TestUpdateStatus_Success(t *testing.T) {
 	}
 	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
 	w := performUpdateStatus(t, h, "JB-987", map[string]any{
+		"id":   "JB-987",
 		"from": "pending",
 		"to":   "queued",
 	})
@@ -477,6 +497,7 @@ func TestUpdateStatus_TransitionFailureReturns500(t *testing.T) {
 	}
 	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
 	w := performUpdateStatus(t, h, "JB-112", map[string]any{
+		"id":   "JB-112",
 		"from": "pending",
 		"to":   "failed",
 	})
@@ -518,4 +539,63 @@ func TestGetJobStatus_FailureReturns500(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
 	}
+}
+
+func TestGetSourceVideoURL_Success(t *testing.T) {
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{JobID: jobID}, nil
+		},
+	}
+	minioSvc := &minioMock{
+		uploadBucket: "uploads",
+		getPresignedFn: func(_ context.Context, bucketName, jobID string) (string, error) {
+			if bucketName != "uploads" || jobID != "JB-999" {
+				t.Fatalf("unexpected args bucket=%s job=%s", bucketName, jobID)
+			}
+			return "https://example.test/source.mp4", nil
+		},
+	}
+	h := newTestHandler(repo, minioSvc, &redisMock{})
+	w := performGetSourceURL(t, h, "JB-999")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"source_url":"https://example.test/source.mp4"`)) {
+		t.Fatalf("expected source_url in response body, got %s", w.Body.String())
+	}
+}
+
+func TestGetSourceVideoURL_FailureReturns500(t *testing.T) {
+	t.Run("job lookup fails", func(t *testing.T) {
+		repo := &repoMock{
+			getJobByJobIDFn: func(_ context.Context, _ string) (sqlc.Job, error) {
+				return sqlc.Job{}, errors.New("job missing")
+			},
+		}
+		h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+		w := performGetSourceURL(t, h, "JB-998")
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("presign fails", func(t *testing.T) {
+		repo := &repoMock{
+			getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+				return sqlc.Job{JobID: jobID}, nil
+			},
+		}
+		minioSvc := &minioMock{
+			uploadBucket: "uploads",
+			getPresignedFn: func(_ context.Context, _, _ string) (string, error) {
+				return "", errors.New("minio down")
+			},
+		}
+		h := newTestHandler(repo, minioSvc, &redisMock{})
+		w := performGetSourceURL(t, h, "JB-997")
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
+		}
+	})
 }

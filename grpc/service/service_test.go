@@ -2,14 +2,20 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
-	"time"
 
-	"github.com/franzego/transcoder/grpc/connection"
+	"github.com/franzego/transcoder/grpc/config"
 	pb "github.com/franzego/transcoder/grpc/server"
-	"github.com/redis/go-redis/v9"
+	"github.com/franzego/transcoder/grpc/webserver"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -18,44 +24,175 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func TestNewTranscoderService(t *testing.T) {
-	client := &connection.RedisClient{Client: redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})}
+func makeFakeFFmpeg(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffmpeg")
+	content := `#!/usr/bin/env bash
+if [ "$FFMPEG_SHOULD_FAIL" = "1" ]; then
+  echo "ffmpeg failed" >&2
+  exit 2
+fi
+exit 0
+`
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("failed to write fake ffmpeg: %v", err)
+	}
+	return path
+}
 
-	if got := NewTranscoderService(nil, nil); got == nil {
+func makeWebServer(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var mu sync.Mutex
+	transitions := make([]string, 0, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/jobs/job-1/source-url":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"success":true,"message":"ok","code":200,"metadata":{"job_id":"job-1","source_url":"https://example.test/source.mp4"}}`))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/jobs/job-fail/source-url":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"success":true,"message":"ok","code":200,"metadata":{"job_id":"job-fail","source_url":"https://example.test/source.mp4"}}`))
+			return
+		case r.Method != http.MethodPost:
+			t.Fatalf("unexpected method: %s path: %s", r.Method, r.URL.Path)
+		}
+
+		var req webserver.JobStatusReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode body: %v", err)
+		}
+		mu.Lock()
+		transitions = append(transitions, string(req.From)+"->"+string(req.To))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":"ok"}`))
+	}))
+	return srv, &transitions
+}
+
+func TestNewTranscoderService(t *testing.T) {
+	if got := NewTranscoderService(nil, nil, ""); got == nil {
 		t.Fatal("expected non-nil service even with nil deps")
 	}
-	if got := NewTranscoderService(testLogger(), client); got == nil {
-		t.Fatal("expected non-nil service with valid deps")
+	if got := NewTranscoderService(testLogger(), nil, ""); got.ffmpegPath != "ffmpeg" {
+		t.Fatalf("expected default ffmpeg path, got %q", got.ffmpegPath)
 	}
 }
 
 func TestTranscodeVideo_Validation(t *testing.T) {
-	svc := NewTranscoderService(testLogger(), nil)
+	svc := NewTranscoderService(testLogger(), nil, makeFakeFFmpeg(t))
 
-	tests := []*pb.TranscodeRequest{
-		nil,
-		{JobId: ""},
+	tests := []struct {
+		name string
+		req  *pb.TranscodeRequest
+		code codes.Code
+	}{
+		{name: "nil request", req: nil, code: codes.InvalidArgument},
+		{name: "missing job id", req: &pb.TranscodeRequest{}, code: codes.InvalidArgument},
+		{
+			name: "missing webserver client",
+			req:  &pb.TranscodeRequest{JobId: "job-1"},
+			code: codes.FailedPrecondition,
+		},
 	}
-	for _, req := range tests {
-		_, err := svc.TranscodeVideo(context.Background(), req)
-		if status.Code(err) != codes.InvalidArgument {
-			t.Fatalf("expected InvalidArgument, got code=%s err=%v", status.Code(err), err)
+
+	for _, tt := range tests {
+		_, err := svc.TranscodeVideo(context.Background(), tt.req)
+		if status.Code(err) != tt.code {
+			t.Fatalf("%s: expected %s, got %s (%v)", tt.name, tt.code, status.Code(err), err)
 		}
 	}
 }
 
-func TestTranscodeVideo_RedisFailure(t *testing.T) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         "127.0.0.1:0",
-		DialTimeout:  20 * time.Millisecond,
-		ReadTimeout:  20 * time.Millisecond,
-		WriteTimeout: 20 * time.Millisecond,
-	})
-	defer rdb.Close()
+func TestTranscodeVideo_Success(t *testing.T) {
+	webSrv, transitions := makeWebServer(t)
+	defer webSrv.Close()
 
-	svc := NewTranscoderService(testLogger(), &connection.RedisClient{Client: rdb})
-	_, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-1"})
+	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), makeFakeFFmpeg(t))
+
+	req := &pb.TranscodeRequest{
+		JobId:        "job-1",
+		OutputPath:   "output.mp4",
+		OutputFormat: "mp4",
+		Options: &pb.VideoOptions{
+			Codec:      "h264",
+			Bitrate:    1200,
+			Framerate:  30,
+			Resolution: "1280x720",
+		},
+	}
+
+	resp, err := svc.TranscodeVideo(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Success || resp.Status != "completed" || resp.JobId != "job-1" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	want := []string{
+		"queued->downloading",
+		"downloading->processing",
+		"processing->uploading",
+		"uploading->completed",
+	}
+	if !slices.Equal(*transitions, want) {
+		t.Fatalf("unexpected transitions: got=%v want=%v", *transitions, want)
+	}
+}
+
+func TestTranscodeVideo_FFmpegFailureMarksJobFailed(t *testing.T) {
+	t.Setenv("FFMPEG_SHOULD_FAIL", "1")
+	webSrv, transitions := makeWebServer(t)
+	defer webSrv.Close()
+
+	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), makeFakeFFmpeg(t))
+
+	_, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-fail"})
 	if status.Code(err) != codes.Internal {
-		t.Fatalf("expected Internal code, got code=%s err=%v", status.Code(err), err)
+		t.Fatalf("expected Internal, got %s (%v)", status.Code(err), err)
+	}
+	want := []string{
+		"queued->downloading",
+		"downloading->processing",
+		"processing->failed",
+	}
+	if !slices.Equal(*transitions, want) {
+		t.Fatalf("unexpected transitions: got=%v want=%v", *transitions, want)
+	}
+}
+
+func TestTranscodeVideo_DefaultOutputPath(t *testing.T) {
+	webSrv, _ := makeWebServer(t)
+	defer webSrv.Close()
+
+	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), makeFakeFFmpeg(t))
+
+	resp, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.OutputPath != "/tmp/job-1.mp4" {
+		t.Fatalf("expected default output path, got %s", resp.OutputPath)
+	}
+}
+
+func TestBuildFFmpegArgs(t *testing.T) {
+	req := &pb.TranscodeRequest{
+		OutputFormat: "mp4",
+		Options: &pb.VideoOptions{
+			Codec:      "h265",
+			Bitrate:    900,
+			Framerate:  24,
+			Resolution: "1920x1080",
+		},
+	}
+	args := buildFFmpegArgs("in.mp4", "out.mp4", req)
+	got := []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-b:v", "900k", "-r", "24", "-s", "1920x1080", "-f", "mp4", "out.mp4"}
+	if !slices.Equal(args, got) {
+		t.Fatalf("unexpected ffmpeg args:\n got=%v\nwant=%v", args, got)
 	}
 }

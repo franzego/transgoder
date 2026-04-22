@@ -29,6 +29,7 @@ type ServiceRepository interface {
 // for minio
 type MultipartService interface {
 	UploadBucket() string
+	GetPresignedURL(ctx context.Context, bucketName, jobID string) (string, error)
 	NewMultipartUpload(ctx context.Context, bucketName, objectName string) (string, error)
 	PresignedUploadPartURL(ctx context.Context, bucketName, objectName, uploadID string, partNumber int, expires time.Duration) (string, error)
 	CompleteMultipartUpload(ctx context.Context, bucketName, objectName, uploadID string, parts []minio.CompletePart) error

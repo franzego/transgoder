@@ -135,6 +135,11 @@ func main() {
 		statusGroup.GET("/:id/update", h.GetJobStatus)
 	}
 
+	jobsGroup := router.Group("/jobs")
+	{
+		jobsGroup.GET("/:id/source-url", h.GetSourceVideoURL)
+	}
+
 	// Swagger documentation
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	router.GET("/swagger", func(c *gin.Context) {

@@ -109,6 +109,8 @@ definitions:
         - completed
         - failed
         - cancelled
+      id:
+        type: string
       to:
         allOf:
         - $ref: '#/definitions/models.Status'
@@ -123,6 +125,7 @@ definitions:
         - cancelled
     required:
     - from
+    - id
     - to
     type: object
 host: localhost:8084
@@ -132,6 +135,29 @@ info:
   title: Transcoder API
   version: 0.1.0
 paths:
+  /jobs/{id}/source-url:
+    get:
+      description: Retrieve a presigned GET URL for a job's uploaded source video
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Source URL retrieved successfully
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Get source video URL
+      tags:
+      - jobs
   /status/{id}/update:
     get:
       description: Retrieve the current status for a job
