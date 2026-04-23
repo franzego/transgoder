@@ -15,6 +15,82 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/jobs/{id}/download": {
+            "get": {
+                "description": "Trigger transcode if needed and stream the transcoded video to the client",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Download output video",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Video stream",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    }
+                }
+            }
+        },
+        "/jobs/{id}/output-url": {
+            "get": {
+                "description": "Retrieve a presigned GET URL for a job's transcoded output video",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Get output video URL",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Output URL retrieved successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "409": {
+                        "description": "Job is not ready for download",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    }
+                }
+            }
+        },
         "/jobs/{id}/source-url": {
             "get": {
                 "description": "Retrieve a presigned GET URL for a job's uploaded source video",

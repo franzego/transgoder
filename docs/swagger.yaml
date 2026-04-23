@@ -135,6 +135,57 @@ info:
   title: Transcoder API
   version: 0.1.0
 paths:
+  /jobs/{id}/download:
+    get:
+      description: Trigger transcode if needed and stream the transcoded video to
+        the client
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: Video stream
+          schema:
+            type: file
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Download output video
+      tags:
+      - jobs
+  /jobs/{id}/output-url:
+    get:
+      description: Retrieve a presigned GET URL for a job's transcoded output video
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Output URL retrieved successfully
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "409":
+          description: Job is not ready for download
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Get output video URL
+      tags:
+      - jobs
   /jobs/{id}/source-url:
     get:
       description: Retrieve a presigned GET URL for a job's uploaded source video
