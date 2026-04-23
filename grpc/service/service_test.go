@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/franzego/transcoder/grpc/config"
 	pb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transcoder/grpc/webserver"
+	"github.com/minio/minio-go/v7"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -71,17 +73,34 @@ func makeWebServer(t *testing.T) (*httptest.Server, *[]string) {
 	return srv, &transitions
 }
 
+type fakeUploader struct {
+	err       error
+	calls     int
+	bucket    string
+	objectKey string
+}
+
+func (f *fakeUploader) FPutObject(_ context.Context, bucketName, objectName, _ string, _ minio.PutObjectOptions) (minio.UploadInfo, error) {
+	f.calls++
+	f.bucket = bucketName
+	f.objectKey = objectName
+	if f.err != nil {
+		return minio.UploadInfo{}, f.err
+	}
+	return minio.UploadInfo{Bucket: bucketName, Key: objectName}, nil
+}
+
 func TestNewTranscoderService(t *testing.T) {
-	if got := NewTranscoderService(nil, nil, ""); got == nil {
+	if got := NewTranscoderService(nil, nil, nil, "", ""); got == nil {
 		t.Fatal("expected non-nil service even with nil deps")
 	}
-	if got := NewTranscoderService(testLogger(), nil, ""); got.ffmpegPath != "ffmpeg" {
+	if got := NewTranscoderService(testLogger(), nil, nil, "", ""); got.ffmpegPath != "ffmpeg" {
 		t.Fatalf("expected default ffmpeg path, got %q", got.ffmpegPath)
 	}
 }
 
 func TestTranscodeVideo_Validation(t *testing.T) {
-	svc := NewTranscoderService(testLogger(), nil, makeFakeFFmpeg(t))
+	svc := NewTranscoderService(testLogger(), nil, nil, "", makeFakeFFmpeg(t))
 
 	tests := []struct {
 		name string
@@ -95,10 +114,20 @@ func TestTranscodeVideo_Validation(t *testing.T) {
 			req:  &pb.TranscodeRequest{JobId: "job-1"},
 			code: codes.FailedPrecondition,
 		},
+		{
+			name: "missing minio uploader",
+			req:  &pb.TranscodeRequest{JobId: "job-1"},
+			code: codes.FailedPrecondition,
+		},
 	}
 
 	for _, tt := range tests {
-		_, err := svc.TranscodeVideo(context.Background(), tt.req)
+		testSvc := svc
+		if tt.name == "missing minio uploader" {
+			cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: "http://example.test"}}
+			testSvc = NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "", makeFakeFFmpeg(t))
+		}
+		_, err := testSvc.TranscodeVideo(context.Background(), tt.req)
 		if status.Code(err) != tt.code {
 			t.Fatalf("%s: expected %s, got %s (%v)", tt.name, tt.code, status.Code(err), err)
 		}
@@ -110,7 +139,9 @@ func TestTranscodeVideo_Success(t *testing.T) {
 	defer webSrv.Close()
 
 	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
-	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), makeFakeFFmpeg(t))
+	uploader := &fakeUploader{}
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t))
+	svc.uploader = uploader
 
 	req := &pb.TranscodeRequest{
 		JobId:        "job-1",
@@ -131,6 +162,9 @@ func TestTranscodeVideo_Success(t *testing.T) {
 	if !resp.Success || resp.Status != "completed" || resp.JobId != "job-1" {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
+	if uploader.calls != 1 || uploader.bucket != "downloads" || uploader.objectKey != "output.mp4" {
+		t.Fatalf("unexpected upload call: calls=%d bucket=%s object=%s", uploader.calls, uploader.bucket, uploader.objectKey)
+	}
 	want := []string{
 		"queued->downloading",
 		"downloading->processing",
@@ -148,7 +182,9 @@ func TestTranscodeVideo_FFmpegFailureMarksJobFailed(t *testing.T) {
 	defer webSrv.Close()
 
 	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
-	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), makeFakeFFmpeg(t))
+	uploader := &fakeUploader{}
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t))
+	svc.uploader = uploader
 
 	_, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-fail"})
 	if status.Code(err) != codes.Internal {
@@ -169,14 +205,40 @@ func TestTranscodeVideo_DefaultOutputPath(t *testing.T) {
 	defer webSrv.Close()
 
 	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
-	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), makeFakeFFmpeg(t))
+	uploader := &fakeUploader{}
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t))
+	svc.uploader = uploader
 
 	resp, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.OutputPath != "/tmp/job-1.mp4" {
-		t.Fatalf("expected default output path, got %s", resp.OutputPath)
+	if resp.OutputPath != "job-1.mp4" {
+		t.Fatalf("expected default object key, got %s", resp.OutputPath)
+	}
+}
+
+func TestTranscodeVideo_UploadFailureMarksJobFailed(t *testing.T) {
+	webSrv, transitions := makeWebServer(t)
+	defer webSrv.Close()
+
+	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
+	uploader := &fakeUploader{err: errors.New("upload failed")}
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t))
+	svc.uploader = uploader
+
+	_, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-1"})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal, got %s (%v)", status.Code(err), err)
+	}
+	want := []string{
+		"queued->downloading",
+		"downloading->processing",
+		"processing->uploading",
+		"uploading->failed",
+	}
+	if !slices.Equal(*transitions, want) {
+		t.Fatalf("unexpected transitions: got=%v want=%v", *transitions, want)
 	}
 }
 

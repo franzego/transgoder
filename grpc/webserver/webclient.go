@@ -25,6 +25,7 @@ func NewWebserverClient(cfg *config.Config) *WebserverClient {
 	}
 }
 
+// UpdateJobStatus sends a request to the web server to update the status of a job.
 func (wc *WebserverClient) UpdateJobStatus(ctx context.Context, req JobStatusReq) (JobStatusResponse, error) {
 	url := wc.cfg.WebServer.ServerUrl
 	path := fmt.Sprintf("%s/status/%s/update", url, req.JobID)
@@ -61,6 +62,9 @@ func (wc *WebserverClient) UpdateJobStatus(ctx context.Context, req JobStatusReq
 	return res, nil
 }
 
+// GetSourceURL retrieves the source URL which is the presigned url from minio for a given job ID from the web server.
+// It constructs the appropriate HTTP request, sends it, and processes the response to extract the source URL.
+// If any step fails, it returns an error with details about the failure.
 func (wc *WebserverClient) GetSourceURL(ctx context.Context, jobID string) (string, error) {
 	path := fmt.Sprintf("%s/jobs/%s/source-url", wc.cfg.WebServer.ServerUrl, jobID)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)

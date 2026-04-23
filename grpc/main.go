@@ -32,9 +32,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer redisClient.Close()
+	minioClient, err := connection.NewMinioConnection(ctx, &cfg.Minio, logger)
+	if err != nil {
+		logger.Error("Failed to connect to minio", "error", err)
+		os.Exit(1)
+	}
 	redisRepo := repository.NewRedisRepo(&cfg.Redis, redisClient)
 	webClient := webserver.NewWebserverClient(cfg)
-	transcoderService := service.NewTranscoderService(logger, webClient, cfg.FFmpeg.Path)
+	transcoderService := service.NewTranscoderService(logger, webClient, minioClient, cfg.Minio.DownloadBucket, cfg.FFmpeg.Path)
 
 	workerPool := worker.NewWorkerPool(cfg.Worker.Count, redisRepo, transcoderService)
 	if workerPool == nil {

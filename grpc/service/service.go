@@ -9,25 +9,36 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/minio/minio-go/v7"
+
+	"github.com/franzego/transcoder/grpc/connection"
 	pb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transcoder/grpc/webserver"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+type objectUploader interface {
+	FPutObject(ctx context.Context, bucketName, objectName, filePath string, opts minio.PutObjectOptions) (minio.UploadInfo, error)
+}
+
 type TranscoderService struct {
 	logger *slog.Logger
 	pb.UnimplementedTranscoderServiceServer
-	wc         *webserver.WebserverClient
-	ffmpegPath string
+	wc             *webserver.WebserverClient
+	uploader       objectUploader
+	downloadBucket string
+	ffmpegPath     string
 }
 
-func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, ffmpegPath string) *TranscoderService {
+func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, minioClient *connection.MinioClient, downloadBucket, ffmpegPath string) *TranscoderService {
 	if logger == nil {
 		ts := &TranscoderService{
-			logger:     logger,
-			wc:         wc,
-			ffmpegPath: ffmpegPath,
+			logger:         logger,
+			wc:             wc,
+			uploader:       minioClient,
+			downloadBucket: downloadBucket,
+			ffmpegPath:     ffmpegPath,
 		}
 		return ts
 	}
@@ -35,9 +46,11 @@ func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, ff
 		ffmpegPath = "ffmpeg"
 	}
 	return &TranscoderService{
-		logger:     logger,
-		wc:         wc,
-		ffmpegPath: ffmpegPath,
+		logger:         logger,
+		wc:             wc,
+		uploader:       minioClient,
+		downloadBucket: downloadBucket,
+		ffmpegPath:     ffmpegPath,
 	}
 
 }
@@ -48,20 +61,32 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 	if s.wc == nil {
 		return nil, status.Error(codes.FailedPrecondition, "webserver client is required")
 	}
+	if s.uploader == nil {
+		return nil, status.Error(codes.FailedPrecondition, "minio uploader is required")
+	}
+	if s.downloadBucket == "" {
+		return nil, status.Error(codes.FailedPrecondition, "download bucket is required")
+	}
 
 	start := time.Now()
 	jobID := req.GetJobId()
 	currentStatus := webserver.StatusQueued
-	outputPath := req.GetOutputPath()
-	if outputPath == "" {
-		outputPath = filepath.Join("/tmp", jobID+".mp4")
+	outputFormat := req.GetOutputFormat()
+	if outputFormat == "" {
+		outputFormat = "mp4"
 	}
+	objectKey := filepath.Base(req.GetOutputPath())
+	if objectKey == "" || objectKey == "." || objectKey == "/" {
+		objectKey = fmt.Sprintf("%s.%s", jobID, outputFormat)
+	}
+	localOutputPath := filepath.Join("/tmp", objectKey)
 
 	if err := s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusDownloading); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update job status to downloading: %v", err)
 	}
 	currentStatus = webserver.StatusDownloading
 
+	// This is the presigned url for that particular jobid that will use to  download the videofile from minio to local tmp storage for transcoding
 	inputURL, err := s.wc.GetSourceURL(ctx, jobID)
 	if err != nil {
 		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
@@ -73,7 +98,9 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 	}
 	currentStatus = webserver.StatusProcessing
 
-	ffmpegArgs := buildFFmpegArgs(inputURL, outputPath, req)
+	// the transcoding will happen here. We will use ffmpeg for transcoding and execute it as a subprocess.
+	// The input will be the presigned url and the output will be stored in local tmp storage before uploading it back to minio.
+	ffmpegArgs := buildFFmpegArgs(inputURL, localOutputPath, req)
 	cmd := exec.CommandContext(ctx, s.ffmpegPath, ffmpegArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -85,6 +112,11 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 		return nil, status.Errorf(codes.Internal, "failed to update job status to uploading: %v", err)
 	}
 	currentStatus = webserver.StatusUploading
+	// we have to upload back to minio.
+	if err := s.uploadOutput(ctx, localOutputPath, objectKey, outputFormat); err != nil {
+		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
+		return nil, status.Errorf(codes.Internal, "failed to upload transcoded output to minio: %v", err)
+	}
 
 	if err := s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusCompleted); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update job status to completed: %v", err)
@@ -94,7 +126,7 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 		JobId:      jobID,
 		Status:     "completed",
 		Success:    true,
-		OutputPath: outputPath,
+		OutputPath: objectKey, // this is the key/url that will be used to download the transcoded video from minio to the client.
 		DurationMs: time.Since(start).Milliseconds(),
 	}, nil
 }
@@ -141,4 +173,19 @@ func buildFFmpegArgs(inputPath, outputPath string, req *pb.TranscodeRequest) []s
 	}
 	args = append(args, outputPath)
 	return args
+}
+
+func (s *TranscoderService) uploadOutput(ctx context.Context, localPath, objectKey, outputFormat string) error {
+	contentType := "application/octet-stream"
+	if outputFormat != "" {
+		contentType = "video/" + outputFormat
+	}
+	_, err := s.uploader.FPutObject(
+		ctx,
+		s.downloadBucket,
+		objectKey,
+		localPath,
+		minio.PutObjectOptions{ContentType: contentType},
+	)
+	return err
 }
