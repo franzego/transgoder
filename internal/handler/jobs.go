@@ -3,9 +3,11 @@ package handler
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
+	transcoderpb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transgoder/internal/models"
 	"github.com/gin-gonic/gin"
 )
@@ -161,12 +163,7 @@ func (h *Handler) GetOutputVideoURL(c *gin.Context) {
 		return
 	}
 
-	format := "mp4"
-	if meta, err := h.service.GetVideoMetaByJobID(c, jobID); err == nil && meta.Format.Valid && meta.Format.String != "" {
-		format = strings.ToLower(meta.Format.String)
-	}
-	objectKey := fmt.Sprintf("%s.%s", jobID, format)
-	outputURL, err := h.minioService.GetPresignedURL(c.Request.Context(), h.minioService.DownloadBucket(), objectKey)
+	objectKey, outputURL, err := h.resolveOutputURL(c, jobID)
 	if err != nil {
 		h.logger.Error("failed to generate output presigned url", "error", err, "job_id", jobID)
 		c.JSON(http.StatusInternalServerError, models.ApiMessage{
@@ -187,4 +184,138 @@ func (h *Handler) GetOutputVideoURL(c *gin.Context) {
 			"object_key": objectKey,
 		},
 	})
+}
+
+// DownloadOutputVideo godoc
+// @Summary Download output video
+// @Description Trigger transcode if needed and stream the transcoded video to the client
+// @Tags jobs
+// @Produce application/octet-stream
+// @Param id path string true "Job ID"
+// @Success 200 {file} file "Video stream"
+// @Failure 500 {object} models.ApiMessage "Internal server error"
+// @Router /jobs/{id}/download [get]
+func (h *Handler) DownloadOutputVideo(c *gin.Context) {
+	jobID := c.Param("id")
+	job, err := h.service.GetJobByJobID(c.Request.Context(), jobID)
+	if err != nil {
+		h.logger.Error("failed to get job", "error", err, "job_id", jobID)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Failed to get job",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	if strings.ToLower(job.Status) != string(models.StatusCompleted) {
+		if h.grpcClient == nil {
+			c.JSON(http.StatusInternalServerError, models.ApiMessage{
+				Message: "gRPC transcoder client not configured",
+				Success: false,
+				Code:    http.StatusInternalServerError,
+			})
+			return
+		}
+		meta, err := h.service.GetVideoMetaByJobID(c.Request.Context(), jobID)
+		if err != nil {
+			h.logger.Error("failed to get video metadata for transcode", "error", err, "job_id", jobID)
+			c.JSON(http.StatusInternalServerError, models.ApiMessage{
+				Message: "Failed to get video metadata",
+				Success: false,
+				Code:    http.StatusInternalServerError,
+			})
+			return
+		}
+		req := &transcoderpb.TranscodeRequest{
+			JobId:        jobID,
+			OutputFormat: strings.ToLower(meta.Format.String),
+			Options: &transcoderpb.VideoOptions{
+				Codec: meta.Codec,
+			},
+		}
+		if meta.Bitrate.Valid {
+			req.Options.Bitrate = meta.Bitrate.Int32
+		}
+		if meta.Framerate.Valid {
+			req.Options.Framerate = meta.Framerate.Int32
+		}
+		if meta.Resolution.Valid {
+			req.Options.Resolution = meta.Resolution.String
+		}
+		resp, err := h.grpcClient.TranscodeVideo(c.Request.Context(), req)
+		if err != nil || resp == nil || !resp.Success {
+			h.logger.Error("transcode rpc failed", "error", err, "job_id", jobID)
+			c.JSON(http.StatusInternalServerError, models.ApiMessage{
+				Message: "Failed to transcode video",
+				Success: false,
+				Code:    http.StatusInternalServerError,
+			})
+			return
+		}
+	}
+
+	objectKey, outputURL, err := h.resolveOutputURL(c, jobID)
+	if err != nil {
+		h.logger.Error("failed to resolve output url", "error", err, "job_id", jobID)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Failed to get output URL",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, outputURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Failed to create download request",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Failed to download output video",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Output download failed",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", objectKey))
+	c.Status(http.StatusOK)
+	if _, err := io.Copy(c.Writer, resp.Body); err != nil {
+		h.logger.Error("failed to stream output video", "error", err, "job_id", jobID)
+	}
+}
+
+func (h *Handler) resolveOutputURL(c *gin.Context, jobID string) (string, string, error) {
+	format := "mp4"
+	if meta, err := h.service.GetVideoMetaByJobID(c, jobID); err == nil && meta.Format.Valid && meta.Format.String != "" {
+		format = strings.ToLower(meta.Format.String)
+	}
+	objectKey := fmt.Sprintf("%s.%s", jobID, format)
+	outputURL, err := h.minioService.GetPresignedURL(c.Request.Context(), h.minioService.DownloadBucket(), objectKey)
+	if err != nil {
+		return "", "", err
+	}
+	return objectKey, outputURL, nil
 }

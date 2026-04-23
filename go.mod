@@ -3,17 +3,21 @@ module github.com/franzego/transgoder
 go 1.25.0
 
 require (
+	github.com/franzego/transcoder/grpc v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.9.1
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/joho/godotenv v1.5.1
 	github.com/minio/minio-go/v7 v7.0.100
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
 	github.com/swaggo/swag v1.16.6
+	google.golang.org/grpc v1.80.0
 )
+
+replace github.com/franzego/transcoder/grpc => ./grpc
 
 require (
 	github.com/KyleBanks/depth v1.2.1 // indirect
@@ -77,6 +81,7 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	sigs.k8s.io/yaml v1.3.0 // indirect

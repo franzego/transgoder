@@ -39,7 +39,14 @@ func main() {
 	}
 	redisRepo := repository.NewRedisRepo(&cfg.Redis, redisClient)
 	webClient := webserver.NewWebserverClient(cfg)
-	transcoderService := service.NewTranscoderService(logger, webClient, minioClient, cfg.Minio.DownloadBucket, cfg.FFmpeg.Path)
+	transcoderService := service.NewTranscoderService(
+		logger,
+		webClient,
+		minioClient,
+		cfg.Minio.DownloadBucket,
+		cfg.FFmpeg.Path,
+		cfg.FFmpeg.ProbePath,
+	)
 
 	workerPool := worker.NewWorkerPool(cfg.Worker.Count, redisRepo, transcoderService)
 	if workerPool == nil {

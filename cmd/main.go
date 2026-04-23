@@ -10,6 +10,7 @@ import (
 
 	"github.com/franzego/transgoder/internal/config"
 	"github.com/franzego/transgoder/internal/connection"
+	"github.com/franzego/transgoder/internal/grpcclient"
 	"github.com/franzego/transgoder/internal/handler"
 	"github.com/franzego/transgoder/internal/repository"
 	"github.com/franzego/transgoder/internal/service"
@@ -94,9 +95,15 @@ func main() {
 	repoService := service.NewRepoService(repo)
 	minioService := service.NewMinioService(&cfg.Minio, minioClient)
 	redisService := service.NewRedisService(repository.NewRedisRepo(&cfg.Redis, redisClient))
+	transcoderClient, err := grpcclient.New(cfg.Grpc.Addr)
+	if err != nil {
+		logger.Error("Failed to create grpc client", "error", err)
+		os.Exit(1)
+	}
+	defer transcoderClient.Close()
 
 	// Initialize Handler
-	h := handler.NewHandler(minioService, repoService, redisService, logger, validate)
+	h := handler.NewHandler(minioService, repoService, redisService, transcoderClient, logger, validate)
 
 	// Setup Gin router
 	router := gin.New()
@@ -139,6 +146,7 @@ func main() {
 	{
 		jobsGroup.GET("/:id/source-url", h.GetSourceVideoURL)
 		jobsGroup.GET("/:id/output-url", h.GetOutputVideoURL)
+		jobsGroup.GET("/:id/download", h.DownloadOutputVideo)
 	}
 
 	// Swagger documentation

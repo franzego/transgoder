@@ -8,6 +8,7 @@ import (
 
 type Config struct {
 	Server   ServerConfig
+	Grpc     GrpcConfig
 	Postgres PostgresConfig
 	Redis    RedisConfig
 	Minio    MinioConfig
@@ -19,6 +20,10 @@ type Config struct {
 type ServerConfig struct {
 	Host string
 	Port int
+}
+
+type GrpcConfig struct {
+	Addr string
 }
 
 type PostgresConfig struct {
@@ -60,10 +65,13 @@ type FFmpegConfig struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Server: ServerConfig{
-			Host: getEnv("SERVER_HOST", "0.0.0.0"),
-			Port: getEnvInt("SERVER_PORT", 8080),
-		},
+			Server: ServerConfig{
+				Host: getEnv("SERVER_HOST", "0.0.0.0"),
+				Port: getEnvInt("SERVER_PORT", 8080),
+			},
+			Grpc: GrpcConfig{
+				Addr: getEnv("GRPC_SERVER_ADDR", "localhost:8099"),
+			},
 		Postgres: PostgresConfig{
 			Host:     getEnv("POSTGRES_HOST", "localhost"),
 			Port:     getEnvInt("POSTGRES_PORT", 5432), // remember to remove defaults

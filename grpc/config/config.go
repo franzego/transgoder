@@ -67,7 +67,8 @@ type JWTConfig struct {
 }
 
 type FFmpegConfig struct {
-	Path string
+	Path      string
+	ProbePath string
 }
 
 func Load() (*Config, error) {
@@ -110,9 +111,10 @@ func Load() (*Config, error) {
 			Issuer:     getEnv("JWT_ISSUER", "transcoder"),
 			TTLMinutes: getEnvInt("JWT_TTL_MINUTES", 60),
 		},
-		FFmpeg: FFmpegConfig{
-			Path: getEnv("FFMPEG_PATH", "/usr/bin/ffmpeg"),
-		},
+			FFmpeg: FFmpegConfig{
+				Path:      getEnv("FFMPEG_PATH", "/usr/bin/ffmpeg"),
+				ProbePath: getEnv("FFPROBE_PATH", "/usr/bin/ffprobe"),
+			},
 		WebServer: WebServerConfig{
 			ServerUrl: getEnv("WEB_SERVER_URL", "http://localhost:8787"),
 		},

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	transcoderpb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transgoder/internal/models"
 	"github.com/franzego/transgoder/internal/service"
 	"github.com/franzego/transgoder/internal/sqlc"
@@ -44,21 +45,27 @@ type Queuer interface {
 	Dequeue(ctx context.Context, workerID string) (string, string, error)
 }
 
+type TranscoderClient interface {
+	TranscodeVideo(ctx context.Context, req *transcoderpb.TranscodeRequest) (*transcoderpb.TranscodeResponse, error)
+}
+
 type Handler struct {
 	minioService MultipartService
 	service      ServiceRepository
 	logger       *slog.Logger
 	redisService Queuer
+	grpcClient   TranscoderClient
 	validator    *validator.Validate
 	// we will add the services here later
 }
 
-func NewHandler(minioService MultipartService, service ServiceRepository, redisService Queuer, logger *slog.Logger, validator *validator.Validate) *Handler {
+func NewHandler(minioService MultipartService, service ServiceRepository, redisService Queuer, grpcClient TranscoderClient, logger *slog.Logger, validator *validator.Validate) *Handler {
 	return &Handler{
 		minioService: minioService,
 		service:      service,
 		logger:       logger,
 		redisService: redisService,
+		grpcClient:   grpcClient,
 		validator:    validator,
 	}
 }

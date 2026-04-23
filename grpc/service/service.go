@@ -29,9 +29,10 @@ type TranscoderService struct {
 	uploader       objectUploader
 	downloadBucket string
 	ffmpegPath     string
+	ffprobePath    string
 }
 
-func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, minioClient *connection.MinioClient, downloadBucket, ffmpegPath string) *TranscoderService {
+func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, minioClient *connection.MinioClient, downloadBucket, ffmpegPath, ffprobePath string) *TranscoderService {
 	if logger == nil {
 		ts := &TranscoderService{
 			logger:         logger,
@@ -39,11 +40,15 @@ func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, mi
 			uploader:       minioClient,
 			downloadBucket: downloadBucket,
 			ffmpegPath:     ffmpegPath,
+			ffprobePath:    ffprobePath,
 		}
 		return ts
 	}
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
+	}
+	if ffprobePath == "" {
+		ffprobePath = "ffprobe"
 	}
 	return &TranscoderService{
 		logger:         logger,
@@ -51,6 +56,7 @@ func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, mi
 		uploader:       minioClient,
 		downloadBucket: downloadBucket,
 		ffmpegPath:     ffmpegPath,
+		ffprobePath:    ffprobePath,
 	}
 
 }
@@ -91,6 +97,11 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 	if err != nil {
 		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
 		return nil, status.Errorf(codes.Internal, "failed to fetch source url: %v", err)
+	}
+	// we validate that video source using ffprobe.
+	if err := s.validateSourceVideo(ctx, inputURL); err != nil {
+		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
+		return nil, status.Errorf(codes.InvalidArgument, "source video validation failed: %v", err)
 	}
 
 	if err := s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusProcessing); err != nil {
@@ -188,4 +199,24 @@ func (s *TranscoderService) uploadOutput(ctx context.Context, localPath, objectK
 		minio.PutObjectOptions{ContentType: contentType},
 	)
 	return err
+}
+
+func (s *TranscoderService) validateSourceVideo(ctx context.Context, inputURL string) error {
+	cmd := exec.CommandContext(
+		ctx,
+		s.ffprobePath,
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=codec_type",
+		"-of", "default=nokey=1:noprint_wrappers=1",
+		inputURL,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffprobe failed: %w, output=%s", err, string(out))
+	}
+	if len(out) == 0 {
+		return fmt.Errorf("ffprobe produced empty output")
+	}
+	return nil
 }

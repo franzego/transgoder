@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	transcoderpb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transgoder/internal/models"
 	"github.com/franzego/transgoder/internal/sqlc"
 	"github.com/franzego/transgoder/pkg"
@@ -167,12 +168,25 @@ func (m *redisMock) Dequeue(context.Context, string) (string, string, error) {
 	return "", "", nil
 }
 
-func newTestHandler(repo ServiceRepository, minio MultipartService, redis Queuer) *Handler {
+type grpcMock struct {
+	transcodeFn    func(ctx context.Context, req *transcoderpb.TranscodeRequest) (*transcoderpb.TranscodeResponse, error)
+	transcodeCalls int
+}
+
+func (m *grpcMock) TranscodeVideo(ctx context.Context, req *transcoderpb.TranscodeRequest) (*transcoderpb.TranscodeResponse, error) {
+	m.transcodeCalls++
+	if m.transcodeFn != nil {
+		return m.transcodeFn(ctx, req)
+	}
+	return &transcoderpb.TranscodeResponse{Success: true}, nil
+}
+
+func newTestHandler(repo ServiceRepository, minio MultipartService, redis Queuer, grpcClient TranscoderClient) *Handler {
 	gin.SetMode(gin.TestMode)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	validate := validator.New()
 	pkg.RegisterCustomValidations(validate)
-	return NewHandler(minio, repo, redis, logger, validate)
+	return NewHandler(minio, repo, redis, grpcClient, logger, validate)
 }
 
 func performInitiate(t *testing.T, h *Handler, payload map[string]any) *httptest.ResponseRecorder {
@@ -254,6 +268,17 @@ func performGetOutputURL(t *testing.T, h *Handler, jobID string) *httptest.Respo
 	return w
 }
 
+func performDownloadOutput(t *testing.T, h *Handler, jobID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+jobID+"/download", nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: jobID}}
+	h.DownloadOutputVideo(c)
+	return w
+}
+
 func TestInitiateMultipartUploadHandler_NewMultipartUploadFailureCleansUpJob(t *testing.T) {
 	repo := &repoMock{
 		createJobFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
@@ -266,7 +291,7 @@ func TestInitiateMultipartUploadHandler_NewMultipartUploadFailureCleansUpJob(t *
 			return "", errors.New("minio unavailable")
 		},
 	}
-	h := newTestHandler(repo, minioSvc, &redisMock{})
+	h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
 	w := performInitiate(t, h, map[string]any{
 		"file_name": "video.mp4",
 		"file_size": 6 * 1024 * 1024,
@@ -301,7 +326,7 @@ func TestInitiateMultipartUploadHandler_PresignFailureAbortsAndDeletes(t *testin
 			return "https://example.test/upload/part", nil
 		},
 	}
-	h := newTestHandler(repo, minioSvc, &redisMock{})
+	h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
 	w := performInitiate(t, h, map[string]any{
 		"file_name": "video.mp4",
 		"file_size": 11 * 1024 * 1024,
@@ -337,7 +362,7 @@ func TestInitiateMultipartUploadHandler_CreatePresignedURLFailureAbortsAndDelete
 			return "upload-2", nil
 		},
 	}
-	h := newTestHandler(repo, minioSvc, &redisMock{})
+	h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
 	w := performInitiate(t, h, map[string]any{
 		"file_name": "video.mp4",
 		"file_size": 6 * 1024 * 1024,
@@ -358,7 +383,7 @@ func TestInitiateMultipartUploadHandler_CreatePresignedURLFailureAbortsAndDelete
 func TestInitiateMultipartUploadHandler_RejectsTooManyParts(t *testing.T) {
 	repo := &repoMock{}
 	minioSvc := &minioMock{uploadBucket: "uploads"}
-	h := newTestHandler(repo, minioSvc, &redisMock{})
+	h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
 
 	tooMany := int64(10001 * 5 * 1024 * 1024)
 	w := performInitiate(t, h, map[string]any{
@@ -409,7 +434,7 @@ func TestCompleteMultipartUploadHandler_TransitionPendingToQueued(t *testing.T) 
 		uploadBucket: "uploads",
 	}
 	redisSvc := &redisMock{}
-	h := newTestHandler(repo, minioSvc, redisSvc)
+	h := newTestHandler(repo, minioSvc, redisSvc, nil)
 
 	w := performComplete(t, h, map[string]any{
 		"job_id":    "JB-123",
@@ -452,7 +477,7 @@ func TestCompleteMultipartUploadHandler_TransitionFailureReturns500(t *testing.T
 		uploadBucket: "uploads",
 	}
 	redisSvc := &redisMock{}
-	h := newTestHandler(repo, minioSvc, redisSvc)
+	h := newTestHandler(repo, minioSvc, redisSvc, nil)
 
 	w := performComplete(t, h, map[string]any{
 		"job_id":    "JB-321",
@@ -484,7 +509,7 @@ func TestUpdateStatus_Success(t *testing.T) {
 			return nil
 		},
 	}
-	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
 	w := performUpdateStatus(t, h, "JB-987", map[string]any{
 		"id":   "JB-987",
 		"from": "pending",
@@ -501,7 +526,7 @@ func TestUpdateStatus_Success(t *testing.T) {
 
 func TestUpdateStatus_ValidationFailureReturns400(t *testing.T) {
 	repo := &repoMock{}
-	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
 	w := performUpdateStatus(t, h, "JB-111", map[string]any{
 		"from": "pending",
 	})
@@ -520,7 +545,7 @@ func TestUpdateStatus_TransitionFailureReturns500(t *testing.T) {
 			return errors.New("invalid transition")
 		},
 	}
-	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
 	w := performUpdateStatus(t, h, "JB-112", map[string]any{
 		"id":   "JB-112",
 		"from": "pending",
@@ -541,7 +566,7 @@ func TestGetJobStatus_Success(t *testing.T) {
 			return sqlc.Job{JobID: jobID, Status: "processing"}, nil
 		},
 	}
-	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
 	w := performGetJobStatus(t, h, "JB-700")
 
 	if w.Code != http.StatusOK {
@@ -558,7 +583,7 @@ func TestGetJobStatus_FailureReturns500(t *testing.T) {
 			return sqlc.Job{}, errors.New("db unavailable")
 		},
 	}
-	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
 	w := performGetJobStatus(t, h, "JB-701")
 
 	if w.Code != http.StatusInternalServerError {
@@ -582,7 +607,7 @@ func TestGetSourceVideoURL_Success(t *testing.T) {
 			return "https://example.test/source.mp4", nil
 		},
 	}
-	h := newTestHandler(repo, minioSvc, &redisMock{})
+	h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
 	w := performGetSourceURL(t, h, "JB-999")
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
@@ -599,7 +624,7 @@ func TestGetSourceVideoURL_FailureReturns500(t *testing.T) {
 				return sqlc.Job{}, errors.New("job missing")
 			},
 		}
-		h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{})
+		h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
 		w := performGetSourceURL(t, h, "JB-998")
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
@@ -619,7 +644,7 @@ func TestGetSourceVideoURL_FailureReturns500(t *testing.T) {
 				return "", errors.New("minio down")
 			},
 		}
-		h := newTestHandler(repo, minioSvc, &redisMock{})
+		h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
 		w := performGetSourceURL(t, h, "JB-997")
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
@@ -646,7 +671,7 @@ func TestGetOutputVideoURL_Success(t *testing.T) {
 			return "https://example.test/download.mov", nil
 		},
 	}
-	h := newTestHandler(repo, minioSvc, &redisMock{})
+	h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
 	w := performGetOutputURL(t, h, "JB-801")
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
@@ -662,7 +687,7 @@ func TestGetOutputVideoURL_NotReadyReturns409(t *testing.T) {
 			return sqlc.Job{JobID: jobID, Status: "processing"}, nil
 		},
 	}
-	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads", downloadBucket: "downloads"}, &redisMock{})
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads", downloadBucket: "downloads"}, &redisMock{}, nil)
 	w := performGetOutputURL(t, h, "JB-802")
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected status 409, got %d, body: %s", w.Code, w.Body.String())
@@ -676,7 +701,7 @@ func TestGetOutputVideoURL_Failures(t *testing.T) {
 				return sqlc.Job{}, errors.New("db down")
 			},
 		}
-		h := newTestHandler(repo, &minioMock{uploadBucket: "uploads", downloadBucket: "downloads"}, &redisMock{})
+		h := newTestHandler(repo, &minioMock{uploadBucket: "uploads", downloadBucket: "downloads"}, &redisMock{}, nil)
 		w := performGetOutputURL(t, h, "JB-803")
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
@@ -696,10 +721,91 @@ func TestGetOutputVideoURL_Failures(t *testing.T) {
 				return "", errors.New("minio down")
 			},
 		}
-		h := newTestHandler(repo, minioSvc, &redisMock{})
+		h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
 		w := performGetOutputURL(t, h, "JB-804")
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
 		}
 	})
+}
+
+func TestDownloadOutputVideo_CompletedStreamsVideo(t *testing.T) {
+	videoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("video-bytes"))
+	}))
+	defer videoSrv.Close()
+
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{JobID: jobID, Status: "completed"}, nil
+		},
+	}
+	minioSvc := &minioMock{
+		uploadBucket:   "uploads",
+		downloadBucket: "downloads",
+		getPresignedFn: func(_ context.Context, _, _ string) (string, error) {
+			return videoSrv.URL, nil
+		},
+	}
+	h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
+	w := performDownloadOutput(t, h, "JB-901")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if w.Body.String() != "video-bytes" {
+		t.Fatalf("expected streamed body, got %q", w.Body.String())
+	}
+}
+
+func TestDownloadOutputVideo_TriggersTranscodeWhenNotCompleted(t *testing.T) {
+	videoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("video-bytes"))
+	}))
+	defer videoSrv.Close()
+
+	calls := 0
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			calls++
+			if calls == 1 {
+				return sqlc.Job{JobID: jobID, Status: "queued"}, nil
+			}
+			return sqlc.Job{JobID: jobID, Status: "completed"}, nil
+		},
+		getVideoMetaByJobID: func(_ context.Context, jobID string) (sqlc.Videometum, error) {
+			return sqlc.Videometum{
+				JobID:      jobID,
+				Codec:      "h264",
+				Format:     pgtype.Text{String: "mp4", Valid: true},
+				Resolution: pgtype.Text{String: "1280x720", Valid: true},
+				Bitrate:    pgtype.Int4{Int32: 900, Valid: true},
+				Framerate:  pgtype.Int4{Int32: 30, Valid: true},
+			}, nil
+		},
+	}
+	minioSvc := &minioMock{
+		uploadBucket:   "uploads",
+		downloadBucket: "downloads",
+		getPresignedFn: func(_ context.Context, _, _ string) (string, error) {
+			return videoSrv.URL, nil
+		},
+	}
+	grpcSvc := &grpcMock{
+		transcodeFn: func(_ context.Context, req *transcoderpb.TranscodeRequest) (*transcoderpb.TranscodeResponse, error) {
+			if req.JobId != "JB-902" {
+				t.Fatalf("unexpected job id: %s", req.JobId)
+			}
+			return &transcoderpb.TranscodeResponse{Success: true, OutputPath: "JB-902.mp4"}, nil
+		},
+	}
+	h := newTestHandler(repo, minioSvc, &redisMock{}, grpcSvc)
+	w := performDownloadOutput(t, h, "JB-902")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if grpcSvc.transcodeCalls != 1 {
+		t.Fatalf("expected transcode called once, got %d", grpcSvc.transcodeCalls)
+	}
 }

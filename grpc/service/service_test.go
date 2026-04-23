@@ -42,6 +42,23 @@ exit 0
 	return path
 }
 
+func makeFakeFFprobe(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ffprobe")
+	content := `#!/usr/bin/env bash
+if [ "$FFPROBE_SHOULD_FAIL" = "1" ]; then
+  echo "invalid video" >&2
+  exit 3
+fi
+echo "video"
+exit 0
+`
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("failed to write fake ffprobe: %v", err)
+	}
+	return path
+}
+
 func makeWebServer(t *testing.T) (*httptest.Server, *[]string) {
 	t.Helper()
 	var mu sync.Mutex
@@ -91,16 +108,16 @@ func (f *fakeUploader) FPutObject(_ context.Context, bucketName, objectName, _ s
 }
 
 func TestNewTranscoderService(t *testing.T) {
-	if got := NewTranscoderService(nil, nil, nil, "", ""); got == nil {
+	if got := NewTranscoderService(nil, nil, nil, "", "", ""); got == nil {
 		t.Fatal("expected non-nil service even with nil deps")
 	}
-	if got := NewTranscoderService(testLogger(), nil, nil, "", ""); got.ffmpegPath != "ffmpeg" {
+	if got := NewTranscoderService(testLogger(), nil, nil, "", "", ""); got.ffmpegPath != "ffmpeg" {
 		t.Fatalf("expected default ffmpeg path, got %q", got.ffmpegPath)
 	}
 }
 
 func TestTranscodeVideo_Validation(t *testing.T) {
-	svc := NewTranscoderService(testLogger(), nil, nil, "", makeFakeFFmpeg(t))
+	svc := NewTranscoderService(testLogger(), nil, nil, "", makeFakeFFmpeg(t), makeFakeFFprobe(t))
 
 	tests := []struct {
 		name string
@@ -125,7 +142,7 @@ func TestTranscodeVideo_Validation(t *testing.T) {
 		testSvc := svc
 		if tt.name == "missing minio uploader" {
 			cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: "http://example.test"}}
-			testSvc = NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "", makeFakeFFmpeg(t))
+			testSvc = NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "", makeFakeFFmpeg(t), makeFakeFFprobe(t))
 		}
 		_, err := testSvc.TranscodeVideo(context.Background(), tt.req)
 		if status.Code(err) != tt.code {
@@ -140,7 +157,7 @@ func TestTranscodeVideo_Success(t *testing.T) {
 
 	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
 	uploader := &fakeUploader{}
-	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t))
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t), makeFakeFFprobe(t))
 	svc.uploader = uploader
 
 	req := &pb.TranscodeRequest{
@@ -183,7 +200,7 @@ func TestTranscodeVideo_FFmpegFailureMarksJobFailed(t *testing.T) {
 
 	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
 	uploader := &fakeUploader{}
-	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t))
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t), makeFakeFFprobe(t))
 	svc.uploader = uploader
 
 	_, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-fail"})
@@ -206,7 +223,7 @@ func TestTranscodeVideo_DefaultOutputPath(t *testing.T) {
 
 	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
 	uploader := &fakeUploader{}
-	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t))
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t), makeFakeFFprobe(t))
 	svc.uploader = uploader
 
 	resp, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-1"})
@@ -224,7 +241,7 @@ func TestTranscodeVideo_UploadFailureMarksJobFailed(t *testing.T) {
 
 	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
 	uploader := &fakeUploader{err: errors.New("upload failed")}
-	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t))
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t), makeFakeFFprobe(t))
 	svc.uploader = uploader
 
 	_, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-1"})
@@ -256,5 +273,28 @@ func TestBuildFFmpegArgs(t *testing.T) {
 	got := []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-b:v", "900k", "-r", "24", "-s", "1920x1080", "-f", "mp4", "out.mp4"}
 	if !slices.Equal(args, got) {
 		t.Fatalf("unexpected ffmpeg args:\n got=%v\nwant=%v", args, got)
+	}
+}
+
+func TestTranscodeVideo_FFprobeFailureMarksJobFailed(t *testing.T) {
+	t.Setenv("FFPROBE_SHOULD_FAIL", "1")
+	webSrv, transitions := makeWebServer(t)
+	defer webSrv.Close()
+
+	cfg := &config.Config{WebServer: config.WebServerConfig{ServerUrl: webSrv.URL}}
+	uploader := &fakeUploader{}
+	svc := NewTranscoderService(testLogger(), webserver.NewWebserverClient(cfg), nil, "downloads", makeFakeFFmpeg(t), makeFakeFFprobe(t))
+	svc.uploader = uploader
+
+	_, err := svc.TranscodeVideo(context.Background(), &pb.TranscodeRequest{JobId: "job-1"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %s (%v)", status.Code(err), err)
+	}
+	want := []string{
+		"queued->downloading",
+		"downloading->failed",
+	}
+	if !slices.Equal(*transitions, want) {
+		t.Fatalf("unexpected transitions: got=%v want=%v", *transitions, want)
 	}
 }
