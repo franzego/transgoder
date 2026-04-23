@@ -9,11 +9,17 @@ run:
 build:
 	go build -o transcoder main.go
 
+vet:
+	go vet ./...
+
 test:
 	go test ./...
 
 test-v:
 	go test -v ./...
+
+race:
+	go test -race ./...
 
 tidy:
 	go mod tidy
