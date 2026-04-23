@@ -4,6 +4,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/franzego/transgoder/internal/models"
 	"github.com/gin-gonic/gin"
@@ -125,6 +126,65 @@ func (h *Handler) GetSourceVideoURL(c *gin.Context) {
 		Metadata: map[string]any{
 			"job_id":     jobID,
 			"source_url": sourceURL,
+		},
+	})
+}
+
+// GetOutputVideoURL godoc
+// @Summary Get output video URL
+// @Description Retrieve a presigned GET URL for a job's transcoded output video
+// @Tags jobs
+// @Produce json
+// @Param id path string true "Job ID"
+// @Success 200 {object} models.ApiMessage "Output URL retrieved successfully"
+// @Failure 409 {object} models.ApiMessage "Job is not ready for download"
+// @Failure 500 {object} models.ApiMessage "Internal server error"
+// @Router /jobs/{id}/output-url [get]
+func (h *Handler) GetOutputVideoURL(c *gin.Context) {
+	jobID := c.Param("id")
+	job, err := h.service.GetJobByJobID(c, jobID)
+	if err != nil {
+		h.logger.Error("failed to get job", "error", err, "job_id", jobID)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Failed to get job",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+	if strings.ToLower(job.Status) != string(models.StatusCompleted) {
+		c.JSON(http.StatusConflict, models.ApiMessage{
+			Message: "Job is not ready for download",
+			Success: false,
+			Code:    http.StatusConflict,
+		})
+		return
+	}
+
+	format := "mp4"
+	if meta, err := h.service.GetVideoMetaByJobID(c, jobID); err == nil && meta.Format.Valid && meta.Format.String != "" {
+		format = strings.ToLower(meta.Format.String)
+	}
+	objectKey := fmt.Sprintf("%s.%s", jobID, format)
+	outputURL, err := h.minioService.GetPresignedURL(c.Request.Context(), h.minioService.DownloadBucket(), objectKey)
+	if err != nil {
+		h.logger.Error("failed to generate output presigned url", "error", err, "job_id", jobID)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message: "Failed to generate output URL",
+			Success: false,
+			Code:    http.StatusInternalServerError,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.ApiMessage{
+		Message: "Output URL retrieved successfully",
+		Success: true,
+		Code:    http.StatusOK,
+		Metadata: map[string]any{
+			"job_id":     jobID,
+			"output_url": outputURL,
+			"object_key": objectKey,
 		},
 	})
 }

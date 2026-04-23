@@ -138,6 +138,7 @@ func main() {
 	jobsGroup := router.Group("/jobs")
 	{
 		jobsGroup.GET("/:id/source-url", h.GetSourceVideoURL)
+		jobsGroup.GET("/:id/output-url", h.GetOutputVideoURL)
 	}
 
 	// Swagger documentation

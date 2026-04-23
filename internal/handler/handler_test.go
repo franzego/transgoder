@@ -17,6 +17,7 @@ import (
 	"github.com/franzego/transgoder/pkg"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/minio/minio-go/v7"
 )
 
@@ -25,6 +26,7 @@ type repoMock struct {
 	createPresignedURLFn func(ctx context.Context, jobID, presignedURL string, partNumber int32) (sqlc.PresignedUrl, error)
 	deleteJobFn          func(ctx context.Context, id int32) error
 	getJobByJobIDFn      func(ctx context.Context, jobID string) (sqlc.Job, error)
+	getVideoMetaByJobID  func(ctx context.Context, jobID string) (sqlc.Videometum, error)
 	createVideoMetaFn    func(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error)
 	transitionToFn       func(ctx context.Context, jobID string, from, to models.Status) error
 	createJobCalls       int
@@ -71,6 +73,13 @@ func (m *repoMock) CreateVideoMeta(ctx context.Context, arg models.VideoMedataRe
 	return sqlc.Videometum{}, nil
 }
 
+func (m *repoMock) GetVideoMetaByJobID(ctx context.Context, jobID string) (sqlc.Videometum, error) {
+	if m.getVideoMetaByJobID != nil {
+		return m.getVideoMetaByJobID(ctx, jobID)
+	}
+	return sqlc.Videometum{}, errors.New("not implemented in this test")
+}
+
 func (m *repoMock) TransitionTo(ctx context.Context, jobID string, from, to models.Status) error {
 	m.transitionToCalls++
 	if m.transitionToFn != nil {
@@ -81,6 +90,7 @@ func (m *repoMock) TransitionTo(ctx context.Context, jobID string, from, to mode
 
 type minioMock struct {
 	uploadBucket     string
+	downloadBucket   string
 	getPresignedFn   func(ctx context.Context, bucketName, jobID string) (string, error)
 	newUploadFn      func(ctx context.Context, bucketName, objectName string) (string, error)
 	presignPartURLFn func(ctx context.Context, bucketName, objectName, uploadID string, partNumber int, expires time.Duration) (string, error)
@@ -94,6 +104,10 @@ type minioMock struct {
 
 func (m *minioMock) UploadBucket() string {
 	return m.uploadBucket
+}
+
+func (m *minioMock) DownloadBucket() string {
+	return m.downloadBucket
 }
 
 func (m *minioMock) GetPresignedURL(ctx context.Context, bucketName, jobID string) (string, error) {
@@ -226,6 +240,17 @@ func performGetSourceURL(t *testing.T, h *Handler, jobID string) *httptest.Respo
 	c.Request = req
 	c.Params = gin.Params{{Key: "id", Value: jobID}}
 	h.GetSourceVideoURL(c)
+	return w
+}
+
+func performGetOutputURL(t *testing.T, h *Handler, jobID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+jobID+"/output-url", nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Params = gin.Params{{Key: "id", Value: jobID}}
+	h.GetOutputVideoURL(c)
 	return w
 }
 
@@ -549,6 +574,7 @@ func TestGetSourceVideoURL_Success(t *testing.T) {
 	}
 	minioSvc := &minioMock{
 		uploadBucket: "uploads",
+		downloadBucket: "downloads",
 		getPresignedFn: func(_ context.Context, bucketName, jobID string) (string, error) {
 			if bucketName != "uploads" || jobID != "JB-999" {
 				t.Fatalf("unexpected args bucket=%s job=%s", bucketName, jobID)
@@ -588,12 +614,90 @@ func TestGetSourceVideoURL_FailureReturns500(t *testing.T) {
 		}
 		minioSvc := &minioMock{
 			uploadBucket: "uploads",
+			downloadBucket: "downloads",
 			getPresignedFn: func(_ context.Context, _, _ string) (string, error) {
 				return "", errors.New("minio down")
 			},
 		}
 		h := newTestHandler(repo, minioSvc, &redisMock{})
 		w := performGetSourceURL(t, h, "JB-997")
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestGetOutputVideoURL_Success(t *testing.T) {
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{JobID: jobID, Status: "completed"}, nil
+		},
+		getVideoMetaByJobID: func(_ context.Context, jobID string) (sqlc.Videometum, error) {
+			return sqlc.Videometum{JobID: jobID, Format: pgtype.Text{String: "mov", Valid: true}}, nil
+		},
+	}
+	minioSvc := &minioMock{
+		uploadBucket:   "uploads",
+		downloadBucket: "downloads",
+		getPresignedFn: func(_ context.Context, bucketName, objectKey string) (string, error) {
+			if bucketName != "downloads" || objectKey != "JB-801.mov" {
+				t.Fatalf("unexpected args bucket=%s object=%s", bucketName, objectKey)
+			}
+			return "https://example.test/download.mov", nil
+		},
+	}
+	h := newTestHandler(repo, minioSvc, &redisMock{})
+	w := performGetOutputURL(t, h, "JB-801")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"output_url":"https://example.test/download.mov"`)) {
+		t.Fatalf("expected output_url in response body, got %s", w.Body.String())
+	}
+}
+
+func TestGetOutputVideoURL_NotReadyReturns409(t *testing.T) {
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{JobID: jobID, Status: "processing"}, nil
+		},
+	}
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads", downloadBucket: "downloads"}, &redisMock{})
+	w := performGetOutputURL(t, h, "JB-802")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetOutputVideoURL_Failures(t *testing.T) {
+	t.Run("job lookup fails", func(t *testing.T) {
+		repo := &repoMock{
+			getJobByJobIDFn: func(_ context.Context, _ string) (sqlc.Job, error) {
+				return sqlc.Job{}, errors.New("db down")
+			},
+		}
+		h := newTestHandler(repo, &minioMock{uploadBucket: "uploads", downloadBucket: "downloads"}, &redisMock{})
+		w := performGetOutputURL(t, h, "JB-803")
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("presign fails", func(t *testing.T) {
+		repo := &repoMock{
+			getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+				return sqlc.Job{JobID: jobID, Status: "completed"}, nil
+			},
+		}
+		minioSvc := &minioMock{
+			uploadBucket:   "uploads",
+			downloadBucket: "downloads",
+			getPresignedFn: func(_ context.Context, _, _ string) (string, error) {
+				return "", errors.New("minio down")
+			},
+		}
+		h := newTestHandler(repo, minioSvc, &redisMock{})
+		w := performGetOutputURL(t, h, "JB-804")
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("expected status 500, got %d, body: %s", w.Code, w.Body.String())
 		}

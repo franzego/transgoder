@@ -21,6 +21,7 @@ type ServiceRepository interface {
 	CreateJob(ctx context.Context, jobID string) (sqlc.Job, error)
 	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
 	GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error)
+	GetVideoMetaByJobID(ctx context.Context, jobID string) (sqlc.Videometum, error)
 	CreateVideoMeta(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error)
 	DeleteJob(ctx context.Context, id int32) error
 	TransitionTo(ctx context.Context, jobId string, from, to models.Status) error
@@ -29,6 +30,7 @@ type ServiceRepository interface {
 // for minio
 type MultipartService interface {
 	UploadBucket() string
+	DownloadBucket() string
 	GetPresignedURL(ctx context.Context, bucketName, jobID string) (string, error)
 	NewMultipartUpload(ctx context.Context, bucketName, objectName string) (string, error)
 	PresignedUploadPartURL(ctx context.Context, bucketName, objectName, uploadID string, partNumber int, expires time.Duration) (string, error)
