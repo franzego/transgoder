@@ -93,6 +93,7 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 	currentStatus = webserver.StatusDownloading
 
 	// This is the presigned url for that particular jobid that will use to  download the videofile from minio to local tmp storage for transcoding
+	// This should be carried out with a retry logic
 	inputURL, err := s.wc.GetSourceURL(ctx, jobID)
 	if err != nil {
 		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
@@ -124,6 +125,8 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 	}
 	currentStatus = webserver.StatusUploading
 	// we have to upload back to minio.
+	// would have loved to have a different function for that.
+	// But to keep the code simple and avoid too many abstractions, I am doing it in the same function for now.
 	if err := s.uploadOutput(ctx, localOutputPath, objectKey, outputFormat); err != nil {
 		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
 		return nil, status.Errorf(codes.Internal, "failed to upload transcoded output to minio: %v", err)
