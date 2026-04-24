@@ -8,16 +8,22 @@ import (
 	"time"
 
 	"github.com/franzego/transgoder/internal/config"
-	"github.com/franzego/transgoder/internal/connection"
 	"github.com/redis/go-redis/v9"
 )
 
-type RedisRepo struct {
-	cfg  *config.RedisConfig
-	conn *connection.RedisClient
+// RedisClientCmdable is an interface for Redis commands used by RedisRepo
+type RedisClientCmdable interface {
+	XAdd(ctx context.Context, args *redis.XAddArgs) *redis.StringCmd
+	XReadGroup(ctx context.Context, args *redis.XReadGroupArgs) *redis.XStreamSliceCmd
+	XAutoClaim(ctx context.Context, args *redis.XAutoClaimArgs) *redis.XAutoClaimCmd
 }
 
-func NewRedisRepo(cfg *config.RedisConfig, conn *connection.RedisClient) *RedisRepo {
+type RedisRepo struct {
+	cfg  *config.RedisConfig
+	conn RedisClientCmdable
+}
+
+func NewRedisRepo(cfg *config.RedisConfig, conn RedisClientCmdable) *RedisRepo {
 	if conn == nil || cfg == nil {
 		return nil
 	}

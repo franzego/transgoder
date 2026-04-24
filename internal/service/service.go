@@ -157,6 +157,21 @@ func (r *RepoService) GetPresignedURLsByJobID(ctx context.Context, jobID string)
 	return urls, nil
 }
 
+func (r *RepoService) GetVideoMetaByJobID(ctx context.Context, jobID string) (sqlc.Videometum, error) {
+	if jobID == "" {
+		return sqlc.Videometum{}, ErrInvalidJobID
+	}
+	item, err := r.repo.Q.GetVideoMetaByJobID(ctx, jobID)
+	if err != nil {
+		return sqlc.Videometum{}, &ServiceError{
+			Err:     err,
+			Code:    500,
+			Message: "failed to get video metadata",
+		}
+	}
+	return item, nil
+}
+
 func (r *RepoService) DeleteJob(ctx context.Context, id int32) error {
 	if id == 0 {
 		return ErrInvalidJobID

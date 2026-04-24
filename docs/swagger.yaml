@@ -14,27 +14,31 @@ definitions:
     type: object
   models.MultipartCompleteRequest:
     properties:
-      bitrate:
-        type: integer
+      codec:
+        description: h.264 or h.265
+        type: string
       description:
         type: string
       duration:
         type: integer
       format:
+        description: mp4 or mov
         type: string
+      framerate:
+        description: 1920x1080
+        type: integer
       job_id:
         type: string
       parts:
         items:
           $ref: '#/definitions/models.MultipartUploadPart'
         type: array
-      resolution:
-        type: string
       upload_id:
         type: string
       video_name:
         type: string
     required:
+    - format
     - job_id
     - parts
     - upload_id
@@ -60,6 +64,70 @@ definitions:
     - etag
     - part_number
     type: object
+  models.Status:
+    enum:
+    - pending
+    - queued
+    - downloading
+    - processing
+    - uploading
+    - completed
+    - failed
+    - cancelled
+    type: string
+    x-enum-comments:
+      StatusUploading: after transcoding has been done, we upload back to minio
+    x-enum-descriptions:
+    - ""
+    - ""
+    - ""
+    - ""
+    - after transcoding has been done, we upload back to minio
+    - ""
+    - ""
+    - ""
+    x-enum-varnames:
+    - StatusPending
+    - StatusQueued
+    - StatusDownloading
+    - StatusProcessing
+    - StatusUploading
+    - StatusCompleted
+    - StatusFailed
+    - StatusCancelled
+  models.UpdateStatusRequest:
+    properties:
+      from:
+        allOf:
+        - $ref: '#/definitions/models.Status'
+        enum:
+        - pending
+        - queued
+        - downloading
+        - processing
+        - uploading
+        - completed
+        - failed
+        - cancelled
+      id:
+        type: string
+      to:
+        allOf:
+        - $ref: '#/definitions/models.Status'
+        enum:
+        - pending
+        - queued
+        - downloading
+        - processing
+        - uploading
+        - completed
+        - failed
+        - cancelled
+    required:
+    - from
+    - id
+    - to
+    type: object
 host: localhost:8084
 info:
   contact: {}
@@ -67,6 +135,137 @@ info:
   title: Transcoder API
   version: 0.1.0
 paths:
+  /jobs/{id}/download:
+    get:
+      description: Trigger transcode if needed and stream the transcoded video to
+        the client
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: Video stream
+          schema:
+            type: file
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Download output video
+      tags:
+      - jobs
+  /jobs/{id}/output-url:
+    get:
+      description: Retrieve a presigned GET URL for a job's transcoded output video
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Output URL retrieved successfully
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "409":
+          description: Job is not ready for download
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Get output video URL
+      tags:
+      - jobs
+  /jobs/{id}/source-url:
+    get:
+      description: Retrieve a presigned GET URL for a job's uploaded source video
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Source URL retrieved successfully
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Get source video URL
+      tags:
+      - jobs
+  /status/{id}/update:
+    get:
+      description: Retrieve the current status for a job
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Job status retrieved successfully
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Get job status
+      tags:
+      - status
+    post:
+      consumes:
+      - application/json
+      description: Transition a job from one status to another
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Status transition payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateStatusRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Status updated successfully
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "400":
+          description: Invalid request payload
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ApiMessage'
+      summary: Update job status
+      tags:
+      - status
   /upload/complete:
     post:
       consumes:

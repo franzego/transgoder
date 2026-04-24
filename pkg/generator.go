@@ -1,3 +1,4 @@
+// Package pkg contains utility functions for the transcoder service.
 package pkg
 
 import (

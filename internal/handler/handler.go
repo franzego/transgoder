@@ -8,11 +8,13 @@ import (
 	"strings"
 	"time"
 
+	transcoderpb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transgoder/internal/models"
 	"github.com/franzego/transgoder/internal/service"
 	"github.com/franzego/transgoder/internal/sqlc"
 	"github.com/franzego/transgoder/pkg"
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/minio/minio-go/v7"
 )
 
@@ -20,6 +22,7 @@ type ServiceRepository interface {
 	CreateJob(ctx context.Context, jobID string) (sqlc.Job, error)
 	CreatePresignedURL(ctx context.Context, jobID, presignedUrl string, partNumber int32) (sqlc.PresignedUrl, error)
 	GetJobByJobID(ctx context.Context, jobID string) (sqlc.Job, error)
+	GetVideoMetaByJobID(ctx context.Context, jobID string) (sqlc.Videometum, error)
 	CreateVideoMeta(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error)
 	DeleteJob(ctx context.Context, id int32) error
 	TransitionTo(ctx context.Context, jobId string, from, to models.Status) error
@@ -28,6 +31,8 @@ type ServiceRepository interface {
 // for minio
 type MultipartService interface {
 	UploadBucket() string
+	DownloadBucket() string
+	GetPresignedURL(ctx context.Context, bucketName, jobID string) (string, error)
 	NewMultipartUpload(ctx context.Context, bucketName, objectName string) (string, error)
 	PresignedUploadPartURL(ctx context.Context, bucketName, objectName, uploadID string, partNumber int, expires time.Duration) (string, error)
 	CompleteMultipartUpload(ctx context.Context, bucketName, objectName, uploadID string, parts []minio.CompletePart) error
@@ -40,20 +45,28 @@ type Queuer interface {
 	Dequeue(ctx context.Context, workerID string) (string, string, error)
 }
 
+type TranscoderClient interface {
+	TranscodeVideo(ctx context.Context, req *transcoderpb.TranscodeRequest) (*transcoderpb.TranscodeResponse, error)
+}
+
 type Handler struct {
 	minioService MultipartService
 	service      ServiceRepository
 	logger       *slog.Logger
 	redisService Queuer
+	grpcClient   TranscoderClient
+	validator    *validator.Validate
 	// we will add the services here later
 }
 
-func NewHandler(minioService MultipartService, service ServiceRepository, redisService Queuer, logger *slog.Logger) *Handler {
+func NewHandler(minioService MultipartService, service ServiceRepository, redisService Queuer, grpcClient TranscoderClient, logger *slog.Logger, validator *validator.Validate) *Handler {
 	return &Handler{
 		minioService: minioService,
 		service:      service,
 		logger:       logger,
 		redisService: redisService,
+		grpcClient:   grpcClient,
+		validator:    validator,
 	}
 }
 

@@ -3,7 +3,7 @@
 # PostgreSQL connection variables
 POSTGRES_HOST ?= localhost
 POSTGRES_PORT ?= 5440
-POSTGRES_DB ?= transcoderdb
+POSTGRES_DB ?= transcoder
 POSTGRES_USER ?= transcoder
 POSTGRES_PASSWORD ?= transcoder_password
 VERSION ?= 1

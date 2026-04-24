@@ -6,13 +6,17 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 
 	"github.com/franzego/transgoder/internal/config"
 	"github.com/franzego/transgoder/internal/connection"
+	"github.com/franzego/transgoder/internal/grpcclient"
 	"github.com/franzego/transgoder/internal/handler"
 	"github.com/franzego/transgoder/internal/repository"
 	"github.com/franzego/transgoder/internal/service"
+	"github.com/franzego/transgoder/pkg"
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/joho/godotenv"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -32,9 +36,9 @@ func main() {
 	ctx := context.Background()
 	slog.Info("starting program")
 
-	err := godotenv.Load()
+	err := godotenv.Load(".env")
 	if err != nil {
-		slog.Error("failed to load app.env", "error", err)
+		slog.Error("failed to load .env", "error", err)
 		os.Exit(1)
 	}
 
@@ -49,6 +53,15 @@ func main() {
 	logger := cfg.Logger.LoadLogger()
 	logger.Info("Starting Transcoder API", "port", cfg.Server.Port)
 
+	validate := validator.New()
+	validate.RegisterTagNameFunc(func(fld reflect.StructField) string {
+		name := fld.Tag.Get("json")
+		if name == "-" {
+			return ""
+		}
+		return name
+	})
+	pkg.RegisterCustomValidations(validate)
 	// Connect to PostgreSQL
 	postgresConn, err := connection.NewPostgresConnection(ctx, cfg, logger)
 	if err != nil {
@@ -63,6 +76,7 @@ func main() {
 		logger.Error("Failed to connect to minio", "error", err)
 		os.Exit(1)
 	}
+	// Connect to Redis
 	redisClient, err := connection.NewRedisConnection(ctx, cfg, logger)
 	if err != nil {
 		logger.Error("Failed to connect to redis", "error", err)
@@ -81,9 +95,15 @@ func main() {
 	repoService := service.NewRepoService(repo)
 	minioService := service.NewMinioService(&cfg.Minio, minioClient)
 	redisService := service.NewRedisService(repository.NewRedisRepo(&cfg.Redis, redisClient))
+	transcoderClient, err := grpcclient.New(cfg.Grpc.Addr)
+	if err != nil {
+		logger.Error("Failed to create grpc client", "error", err)
+		os.Exit(1)
+	}
+	defer transcoderClient.Close()
 
 	// Initialize Handler
-	h := handler.NewHandler(minioService, repoService, redisService, logger)
+	h := handler.NewHandler(minioService, repoService, redisService, transcoderClient, logger, validate)
 
 	// Setup Gin router
 	router := gin.New()
@@ -113,6 +133,20 @@ func main() {
 	{
 		uploadGroup.POST("/initiate", h.InitiateMultipartUploadHandler)
 		uploadGroup.POST("/complete", h.CompleteMultipartUploadHandler)
+	}
+
+	// Status routes
+	statusGroup := router.Group("/status")
+	{
+		statusGroup.POST("/:id/update", h.UpdateStatus)
+		statusGroup.GET("/:id/update", h.GetJobStatus)
+	}
+
+	jobsGroup := router.Group("/jobs")
+	{
+		jobsGroup.GET("/:id/source-url", h.GetSourceVideoURL)
+		jobsGroup.GET("/:id/output-url", h.GetOutputVideoURL)
+		jobsGroup.GET("/:id/download", h.DownloadOutputVideo)
 	}
 
 	// Swagger documentation

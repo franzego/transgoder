@@ -15,6 +15,203 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/jobs/{id}/download": {
+            "get": {
+                "description": "Trigger transcode if needed and stream the transcoded video to the client",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Download output video",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Video stream",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    }
+                }
+            }
+        },
+        "/jobs/{id}/output-url": {
+            "get": {
+                "description": "Retrieve a presigned GET URL for a job's transcoded output video",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Get output video URL",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Output URL retrieved successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "409": {
+                        "description": "Job is not ready for download",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    }
+                }
+            }
+        },
+        "/jobs/{id}/source-url": {
+            "get": {
+                "description": "Retrieve a presigned GET URL for a job's uploaded source video",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Get source video URL",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Source URL retrieved successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    }
+                }
+            }
+        },
+        "/status/{id}/update": {
+            "get": {
+                "description": "Retrieve the current status for a job",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "status"
+                ],
+                "summary": "Get job status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job status retrieved successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Transition a job from one status to another",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "status"
+                ],
+                "summary": "Update job status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Status transition payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.UpdateStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Status updated successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request payload",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ApiMessage"
+                        }
+                    }
+                }
+            }
+        },
         "/upload/complete": {
             "post": {
                 "description": "Finish uploading video parts and create metadata",
@@ -130,13 +327,15 @@ const docTemplate = `{
         "models.MultipartCompleteRequest": {
             "type": "object",
             "required": [
+                "format",
                 "job_id",
                 "parts",
                 "upload_id"
             ],
             "properties": {
-                "bitrate": {
-                    "type": "integer"
+                "codec": {
+                    "description": "h.264 or h.265",
+                    "type": "string"
                 },
                 "description": {
                     "type": "string"
@@ -145,7 +344,12 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "format": {
+                    "description": "mp4 or mov",
                     "type": "string"
+                },
+                "framerate": {
+                    "description": "1920x1080",
+                    "type": "integer"
                 },
                 "job_id": {
                     "type": "string"
@@ -155,9 +359,6 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/models.MultipartUploadPart"
                     }
-                },
-                "resolution": {
-                    "type": "string"
                 },
                 "upload_id": {
                     "type": "string"
@@ -196,6 +397,89 @@ const docTemplate = `{
                 },
                 "part_number": {
                     "type": "integer"
+                }
+            }
+        },
+        "models.Status": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "queued",
+                "downloading",
+                "processing",
+                "uploading",
+                "completed",
+                "failed",
+                "cancelled"
+            ],
+            "x-enum-comments": {
+                "StatusUploading": "after transcoding has been done, we upload back to minio"
+            },
+            "x-enum-descriptions": [
+                "",
+                "",
+                "",
+                "",
+                "after transcoding has been done, we upload back to minio",
+                "",
+                "",
+                ""
+            ],
+            "x-enum-varnames": [
+                "StatusPending",
+                "StatusQueued",
+                "StatusDownloading",
+                "StatusProcessing",
+                "StatusUploading",
+                "StatusCompleted",
+                "StatusFailed",
+                "StatusCancelled"
+            ]
+        },
+        "models.UpdateStatusRequest": {
+            "type": "object",
+            "required": [
+                "from",
+                "id",
+                "to"
+            ],
+            "properties": {
+                "from": {
+                    "enum": [
+                        "pending",
+                        "queued",
+                        "downloading",
+                        "processing",
+                        "uploading",
+                        "completed",
+                        "failed",
+                        "cancelled"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Status"
+                        }
+                    ]
+                },
+                "id": {
+                    "type": "string"
+                },
+                "to": {
+                    "enum": [
+                        "pending",
+                        "queued",
+                        "downloading",
+                        "processing",
+                        "uploading",
+                        "completed",
+                        "failed",
+                        "cancelled"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Status"
+                        }
+                    ]
                 }
             }
         }

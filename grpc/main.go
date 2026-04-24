@@ -12,6 +12,7 @@ import (
 	"github.com/franzego/transcoder/grpc/repository"
 	pb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transcoder/grpc/service"
+	"github.com/franzego/transcoder/grpc/webserver"
 	"github.com/franzego/transcoder/grpc/worker"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -31,8 +32,21 @@ func main() {
 		os.Exit(1)
 	}
 	defer redisClient.Close()
+	minioClient, err := connection.NewMinioConnection(ctx, &cfg.Minio, logger)
+	if err != nil {
+		logger.Error("Failed to connect to minio", "error", err)
+		os.Exit(1)
+	}
 	redisRepo := repository.NewRedisRepo(&cfg.Redis, redisClient)
-	transcoderService := service.NewTranscoderService(logger, redisClient)
+	webClient := webserver.NewWebserverClient(cfg)
+	transcoderService := service.NewTranscoderService(
+		logger,
+		webClient,
+		minioClient,
+		cfg.Minio.DownloadBucket,
+		cfg.FFmpeg.Path,
+		cfg.FFmpeg.ProbePath,
+	)
 
 	workerPool := worker.NewWorkerPool(cfg.Worker.Count, redisRepo, transcoderService)
 	if workerPool == nil {
