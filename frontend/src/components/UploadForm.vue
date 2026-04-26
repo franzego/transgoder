@@ -125,7 +125,7 @@ const startUpload = async () => {
       duration: parseInt(config.duration)
     })
 
-    jobStore.updateJob(tempId, { status: 'queued' })
+    jobStore.updateJob(tempId, { status: 'queued', progress: 55 })
     // Move from tempId to real job_id in store for polling consistency
     const jobData = { ...jobStore.activeJobs[tempId], id: job_id }
     delete jobStore.activeJobs[tempId]

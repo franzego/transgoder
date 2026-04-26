@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -207,11 +208,11 @@ func buildFFmpegArgs(inputPath, outputPath string, req *pb.TranscodeRequest) []s
 		if opts.GetCodec() != "" {
 			switch opts.GetCodec() {
 			case "h264":
-				args = append(args, "-c:v", "libx264")
+				args = append(args, "-c:v", "libx264", "-preset", "veryfast")
 			case "h265":
-				args = append(args, "-c:v", "libx265")
+				args = append(args, "-c:v", "libx265", "-preset", "veryfast")
 			case "vp9":
-				args = append(args, "-c:v", "libvpx-vp9")
+				args = append(args, "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "30")
 			default:
 				args = append(args, "-c:v", opts.GetCodec())
 			}
@@ -224,13 +225,18 @@ func buildFFmpegArgs(inputPath, outputPath string, req *pb.TranscodeRequest) []s
 		}
 		if opts.GetResolution() != "" {
 			res := normalizeFFmpegResolution(opts.GetResolution())
-			filter := fmt.Sprintf("scale=%s:flags=lanczos", res)
+			filter := fmt.Sprintf("scale=%s:flags=bicubic", res)
 			args = append(args, "-vf", filter)
 		}
 	}
 	if req.GetOutputFormat() != "" {
 		args = append(args, "-f", req.GetOutputFormat())
 	}
+	maxThreadsPerJob := runtime.NumCPU() / 4
+	if maxThreadsPerJob < 1 {
+		maxThreadsPerJob = 1
+	}
+	args = append(args, "-threads", strconv.Itoa(maxThreadsPerJob))
 	args = append(args, outputPath)
 	return args
 }

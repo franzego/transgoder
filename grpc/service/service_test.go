@@ -270,7 +270,7 @@ func TestBuildFFmpegArgs(t *testing.T) {
 		},
 	}
 	args := buildFFmpegArgs("in.mp4", "out.mp4", req)
-	got := []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-b:v", "900k", "-r", "24", "-vf", "scale=1280x720:flags=lanczos", "-f", "mp4", "out.mp4"}
+	got := []string{"-y", "-i", "in.mp4", "-c:v", "libx265", "-preset", "veryfast", "-b:v", "900k", "-r", "24", "-vf", "scale=1280x720:flags=bicubic", "-f", "mp4", "-progress", "pipe:1", "-nostats", "out.mp4", "threads"}
 	if !slices.Equal(args, got) {
 		t.Fatalf("unexpected ffmpeg args:\n got=%v\nwant=%v", args, got)
 	}

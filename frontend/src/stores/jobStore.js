@@ -1,6 +1,20 @@
 import { defineStore } from 'pinia'
 import { api } from '../services/api'
 
+function progressForStatus(status, current = 0) {
+  const mapped = {
+    pending: 2,
+    queued: 55,
+    downloading: 65,
+    processing: 80,
+    uploading: current, // preserve multipart upload progress while uploading parts
+    completed: 100,
+    failed: current,
+    cancelled: current
+  }
+  return mapped[status] ?? current
+}
+
 export const useJobStore = defineStore('job', {
   state: () => ({
     activeJobs: {}, // Map of jobId -> { id, name, status, progress, error }
@@ -45,7 +59,11 @@ export const useJobStore = defineStore('job', {
         try {
           const res = await api.getStatus(jobId)
           const newStatus = res.metadata.status
-          this.updateJob(jobId, { status: newStatus })
+          const current = this.activeJobs[jobId]?.progress ?? 0
+          this.updateJob(jobId, {
+            status: newStatus,
+            progress: progressForStatus(newStatus, current)
+          })
 
           if (['completed', 'failed', 'cancelled'].includes(newStatus)) {
             this.stopPolling(jobId)
