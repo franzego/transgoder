@@ -14,11 +14,17 @@ import (
 	"github.com/franzego/transcoder/grpc/service"
 	"github.com/franzego/transcoder/grpc/webserver"
 	"github.com/franzego/transcoder/grpc/worker"
+	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 func main() {
+	// Load environment variables from common local paths when running outside containers.
+	// Ignore errors so containerized/runtime env vars still work without .env files.
+	_ = godotenv.Load(".env")
+	_ = godotenv.Load("../.env")
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("Error loading configuration files")
@@ -65,7 +71,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("Starting grpc server", "grpc_port", cfg.Server.Port, "redis_addr", cfg.RedisAddr())
+	slog.Info(
+		"Starting grpc server",
+		"grpc_port", cfg.Server.Port,
+		"redis_addr", cfg.RedisAddr(),
+		"redis_stream", cfg.Redis.StreamName,
+		"redis_group", cfg.Redis.GroupName,
+		"web_server_url", cfg.WebServer.ServerUrl,
+		"ffmpeg_path", cfg.FFmpeg.Path,
+		"ffprobe_path", cfg.FFmpeg.ProbePath,
+	)
 	if err := gs.Serve(l); err != nil {
 		slog.Error("gRPC server exited with error", "error", err)
 		os.Exit(1)

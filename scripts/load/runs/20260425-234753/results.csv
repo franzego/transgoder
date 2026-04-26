@@ -1,0 +1,11 @@
+user,job_id,result,bytes,parts,uploaded_parts,duration_sec,reason
+1,,init_failed,452984832,7,0,0,http_000000
+2,,init_failed,1119879168,17,0,0,http_000000
+3,,init_failed,1721761792,26,0,0,http_000000
+4,,init_failed,965738496,15,0,0,http_000000
+5,,init_failed,1780482048,27,0,0,http_000000
+6,,init_failed,2064646144,31,0,0,http_000000
+7,,init_failed,1016070144,16,0,0,http_000000
+8,,init_failed,333447168,5,0,0,http_000000
+9,,init_failed,1110441984,17,0,0,http_000000
+10,,init_failed,821035008,13,0,0,http_000000
