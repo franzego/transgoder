@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -330,13 +331,23 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 	if codec == "" {
 		codec = "h264"
 	}
+	resolution, err := normalizeResolutionPreset(req.Resolution)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ApiMessage{
+			Success: false,
+			Message: "Invalid resolution",
+			Code:    400,
+			Error:   err.Error(),
+		})
+		return
+	}
 	metaData := models.VideoMedataReq{
 		JobID:       job.JobID,
 		VideoName:   pkg.TextOrNull(req.VideoName),
 		Description: pkg.TextOrNull(req.Description),
 		Format:      pkg.TextOrNull(req.Format),
 		Bitrate:     pkg.IntOrNull(nil),
-		Resolution:  pkg.TextOrNull(""),
+		Resolution:  pkg.TextOrNull(resolution),
 		Codec:       codec,
 		Framerate:   pkg.IntOrNull(req.Framerate),
 		Duration:    pkg.IntOrNull(req.Duration),
@@ -386,4 +397,17 @@ func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 			"status":   "Currently queued for transcoding. It may take a few minutes.",
 		},
 	})
+}
+
+func normalizeResolutionPreset(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "1080", "1080p", "1920x1080":
+		return "1080", nil
+	case "720", "720p", "1280x720":
+		return "720", nil
+	case "480", "480p", "854x480":
+		return "480", nil
+	default:
+		return "", fmt.Errorf("resolution must be one of 480, 720, 1080")
+	}
 }

@@ -51,6 +51,7 @@ type MultipartCompleteRequest struct {
 	VideoName   string                `json:"video_name"`
 	Description string                `json:"description"`
 	Format      string                `json:"format" binding:"required"` // mp4 or mov
+	Resolution  string                `json:"resolution"`                 // preset: 480, 720, 1080
 	Codec       string                `json:"codec"`                     // h.264 or h.265
 	Framerate   *int32                `json:"framerate"`                 // 1920x1080
 	Duration    *int32                `json:"duration"`

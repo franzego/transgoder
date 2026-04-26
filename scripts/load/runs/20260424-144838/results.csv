@@ -1,0 +1,2 @@
+user,job_id,result,bytes,parts,uploaded_parts,duration_sec,reason
+1,,init_failed,8388608,2,0,0,http_000000

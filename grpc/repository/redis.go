@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/franzego/transcoder/grpc/config"
@@ -22,6 +23,38 @@ type JobStuff struct {
 	StreamMessage string //Need this for ack later.
 }
 
+const reclaimMinIdle = 60 * time.Second
+
+// extractJobID looks for common keys that might contain the job ID and returns the first non-empty value as a string.
+// This allows for flexibility in the structure of the Redis stream messages while still reliably extracting the job ID for processing.
+func extractJobID(values map[string]any) (string, bool) {
+	keys := []string{"job", "job_id"}
+	for _, k := range keys {
+		v, ok := values[k]
+		if !ok || v == nil {
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			id := strings.TrimSpace(t)
+			if id != "" {
+				return id, true
+			}
+		case []byte:
+			id := strings.TrimSpace(string(t))
+			if id != "" {
+				return id, true
+			}
+		default:
+			id := strings.TrimSpace(fmt.Sprint(t))
+			if id != "" && id != "<nil>" {
+				return id, true
+			}
+		}
+	}
+	return "", false
+}
+
 func NewRedisRepo(cfg *config.RedisConfig, conn *connection.RedisClient) *RedisRepo {
 	if conn == nil || cfg == nil {
 		return nil
@@ -33,6 +66,39 @@ func NewRedisRepo(cfg *config.RedisConfig, conn *connection.RedisClient) *RedisR
 }
 
 func (re *RedisRepo) GetFromStream(ctx context.Context, workerID string) (JobStuff, error) {
+	parseMessage := func(message redis.XMessage) (JobStuff, error) {
+		jobID, ok := extractJobID(message.Values)
+		if !ok {
+			// Poison message: ack it so one bad payload does not block this consumer forever.
+			if _, ackErr := re.conn.XAck(ctx, re.cfg.StreamName, re.cfg.GroupName, message.ID).Result(); ackErr != nil {
+				return JobStuff{}, fmt.Errorf("job field missing in message %s (values=%v); additionally failed to ack malformed message: %w", message.ID, message.Values, ackErr)
+			}
+			slog.Error("Acked malformed redis stream message", "message_id", message.ID, "values", message.Values)
+			return JobStuff{}, nil
+		}
+		return JobStuff{
+			JobID:         jobID,
+			StreamMessage: message.ID,
+		}, nil
+	}
+
+	// Reclaim only stale pending entries so in-flight messages are not duplicated.
+	stale, _, err := re.conn.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+		Stream:   re.cfg.StreamName,
+		Group:    re.cfg.GroupName,
+		Consumer: workerID,
+		MinIdle:  reclaimMinIdle,
+		Start:    "0-0",
+		Count:    1,
+	}).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return JobStuff{}, err
+	}
+	if len(stale) > 0 {
+		return parseMessage(stale[0])
+	}
+
+	// Then read new messages.
 	res, err := re.conn.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    re.cfg.GroupName,
 		Consumer: workerID,
@@ -42,27 +108,15 @@ func (re *RedisRepo) GetFromStream(ctx context.Context, workerID string) (JobStu
 	}).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return JobStuff{
-				JobID: "",
-			}, nil
+			return JobStuff{}, nil
 		}
-		slog.Error("An error has occurred reading from redis group", "error", err)
+		slog.Info("No job in stream")
 		return JobStuff{}, err
 	}
 	if len(res) == 0 || len(res[0].Messages) == 0 {
 		return JobStuff{}, nil
 	}
-	message := res[0].Messages[0]
-	jobID, ok := message.Values["job"].(string)
-	if !ok {
-		return JobStuff{}, fmt.Errorf("job field missing or not a string in message %s", message.ID)
-	}
-	// Always return the jobID and message ID, even if there's an error, so the worker can ack or claim as needed.
-	// The worker needs this ID to call XACK after the job is finished.
-	return JobStuff{
-		JobID:         jobID,
-		StreamMessage: message.ID,
-	}, nil
+	return parseMessage(res[0].Messages[0])
 }
 
 func (re *RedisRepo) Ack(ctx context.Context, messageID string) error {

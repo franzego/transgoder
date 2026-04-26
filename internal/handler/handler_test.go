@@ -408,18 +408,21 @@ func TestCompleteMultipartUploadHandler_TransitionPendingToQueued(t *testing.T) 
 		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
 			return sqlc.Job{JobID: "JB-123"}, nil
 		},
-		createVideoMetaFn: func(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error) {
-			if arg.JobID != "JB-123" {
-				t.Fatalf("expected video meta for JB-123, got %s", arg.JobID)
-			}
-			if !arg.Format.Valid || arg.Format.String != "mp4" {
-				t.Fatalf("expected required format mp4, got %+v", arg.Format)
-			}
-			if arg.Codec != "h264" {
-				t.Fatalf("expected default codec h264, got %+v", arg.Codec)
-			}
-			return sqlc.Videometum{}, nil
-		},
+			createVideoMetaFn: func(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error) {
+				if arg.JobID != "JB-123" {
+					t.Fatalf("expected video meta for JB-123, got %s", arg.JobID)
+				}
+				if !arg.Format.Valid || arg.Format.String != "mp4" {
+					t.Fatalf("expected required format mp4, got %+v", arg.Format)
+				}
+				if !arg.Resolution.Valid || arg.Resolution.String != "1080" {
+					t.Fatalf("expected default resolution 1080, got %+v", arg.Resolution)
+				}
+				if arg.Codec != "h264" {
+					t.Fatalf("expected default codec h264, got %+v", arg.Codec)
+				}
+				return sqlc.Videometum{}, nil
+			},
 		transitionToFn: func(_ context.Context, jobID string, from, to models.Status) error {
 			if jobID != "JB-123" {
 				t.Fatalf("expected transition for JB-123, got %s", jobID)
@@ -494,6 +497,34 @@ func TestCompleteMultipartUploadHandler_TransitionFailureReturns500(t *testing.T
 	}
 	if !bytes.Contains(w.Body.Bytes(), []byte(`"Failed to update job status"`)) {
 		t.Fatalf("expected transition failure response, got %s", w.Body.String())
+	}
+}
+
+func TestCompleteMultipartUploadHandler_InvalidResolutionReturns400(t *testing.T) {
+	repo := &repoMock{
+		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
+			return sqlc.Job{JobID: jobID}, nil
+		},
+	}
+	minioSvc := &minioMock{uploadBucket: "uploads"}
+	h := newTestHandler(repo, minioSvc, &redisMock{}, nil)
+
+	w := performComplete(t, h, map[string]any{
+		"job_id":     "JB-771",
+		"upload_id":  "upload-1",
+		"resolution": "360",
+		"parts": []map[string]any{
+			{"part_number": 1, "etag": "etag-1"},
+		},
+		"video_name": "my_video.mp4",
+		"format":     "mp4",
+	})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"Invalid resolution"`)) {
+		t.Fatalf("expected invalid resolution response, got %s", w.Body.String())
 	}
 }
 

@@ -1,0 +1,8 @@
+Simulation Summary
+Run ID: 20260424-144838
+API Base URL: http://localhost:8080
+Users: 1
+
+init_failed,1
+
+avg_duration_sec,0.00

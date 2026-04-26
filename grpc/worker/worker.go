@@ -44,7 +44,6 @@ func (wp *Workerpool) Dispatcher(ctx context.Context, jobs chan<- repository.Job
 			continue
 		}
 		if job.JobID == "" {
-			slog.Error("")
 			continue
 		}
 		select {

@@ -116,7 +116,7 @@ func Load() (*Config, error) {
 				ProbePath: getEnv("FFPROBE_PATH", "/usr/bin/ffprobe"),
 			},
 		WebServer: WebServerConfig{
-			ServerUrl: getEnv("WEB_SERVER_URL", "http://localhost:8787"),
+			ServerUrl: getEnv("WEB_SERVER_URL", "http://localhost:8084"),
 		},
 		// Logger: LoggerConfig{
 		// 	Level: getEnv("LOG_LEVEL", "info"),
