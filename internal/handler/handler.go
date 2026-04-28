@@ -10,10 +10,11 @@ import (
 	"time"
 
 	transcoderpb "github.com/franzego/transcoder/grpc/server"
-	"github.com/franzego/transgoder/internal/models"
-	"github.com/franzego/transgoder/internal/service"
-	"github.com/franzego/transgoder/internal/sqlc"
-	"github.com/franzego/transgoder/pkg"
+	"github.com/franzego/transcoder/internal/models"
+	"github.com/franzego/transcoder/internal/presets"
+	"github.com/franzego/transcoder/internal/service"
+	"github.com/franzego/transcoder/internal/sqlc"
+	"github.com/franzego/transcoder/pkg"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"github.com/minio/minio-go/v7"
@@ -57,7 +58,6 @@ type Handler struct {
 	redisService Queuer
 	grpcClient   TranscoderClient
 	validator    *validator.Validate
-	// we will add the services here later
 }
 
 func NewHandler(minioService MultipartService, service ServiceRepository, redisService Queuer, grpcClient TranscoderClient, logger *slog.Logger, validator *validator.Validate) *Handler {
@@ -83,34 +83,27 @@ func NewHandler(minioService MultipartService, service ServiceRepository, redisS
 // @Failure 500 {object} models.ApiMessage "Internal server error"
 // @Router /upload/initiate [post]
 func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
-	// This initiates the whole flow from the frontend
-	// The frontend will call this endpoint to get the presigned URLs for each part,
-	//  then it will upload the parts directly to MinIO using those URLs. Once all parts are uploaded,
-	// the frontend will call the complete endpoint to finalize the upload and create the job in the database.
 	var req models.MultipartInitiateRequest
 	var srvError *service.ServiceError
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.ApiMessage{
-			Success: false,
-			Message: "Invalid request payload",
-			Code:    400,
-			Error:   err.Error(),
+			Success:   false,
+			Message:   "Invalid request payload",
+			Code:      http.StatusBadRequest,
+			ErrorCode: models.ErrorCodeValidation,
+			Error:     err.Error(),
 		})
 		return
 	}
 	if req.FileSize <= 0 {
-		c.JSON(http.StatusBadRequest, models.ApiMessage{
-			Success: false,
-			Message: "file_size must be greater than zero",
-			Code:    400,
-		})
+		c.JSON(http.StatusBadRequest, models.ApiMessage{Success: false, Message: "file_size must be greater than zero", Code: http.StatusBadRequest, ErrorCode: models.ErrorCodeValidation})
 		return
 	}
 
 	const (
 		minPartSize     = int64(5 * 1024 * 1024)
 		defaultPartSize = int64(64 * 1024 * 1024)
-		maxParts        = int64(10000) // S3/MinIO multipart hard limit
+		maxParts        = int64(10000)
 		maxFileSize     = int64(5 * 1024 * 1024 * 1024 * 1024)
 	)
 	partSize := req.PartSize
@@ -118,52 +111,29 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 		partSize = defaultPartSize
 	}
 	if partSize < minPartSize {
-		c.JSON(http.StatusBadRequest, models.ApiMessage{
-			Success: false,
-			Message: "part_size must be at least 5MB",
-			Code:    400,
-		})
+		c.JSON(http.StatusBadRequest, models.ApiMessage{Success: false, Message: "part_size must be at least 5MB", Code: http.StatusBadRequest, ErrorCode: models.ErrorCodeValidation})
 		return
 	}
 	if req.FileSize > maxFileSize {
-		c.JSON(http.StatusBadRequest, models.ApiMessage{
-			Success: false,
-			Message: "file_size exceeds 5TB limit",
-			Code:    400,
-		})
+		c.JSON(http.StatusBadRequest, models.ApiMessage{Success: false, Message: "file_size exceeds 5TB limit", Code: http.StatusBadRequest, ErrorCode: models.ErrorCodeValidation})
 		return
 	}
 	totalParts := (req.FileSize + partSize - 1) / partSize
 	if totalParts > maxParts {
-		c.JSON(http.StatusBadRequest, models.ApiMessage{
-			Success: false,
-			Message: "file_size/part_size creates too many parts (max 10000)",
-			Code:    400,
-		})
+		c.JSON(http.StatusBadRequest, models.ApiMessage{Success: false, Message: "file_size/part_size creates too many parts (max 10000)", Code: http.StatusBadRequest, ErrorCode: models.ErrorCodeValidation})
 		return
 	}
 
 	jobID := pkg.GenerateID()
-
 	job, err := h.service.CreateJob(c.Request.Context(), jobID)
 	if err != nil {
 		if errors.As(err, &srvError) {
 			h.logger.Error("Failed to create job", "job_id", jobID, "error", &srvError)
-			c.JSON(http.StatusInternalServerError, models.ApiMessage{
-				Success: false,
-				Message: "Failed to create job",
-				Code:    500,
-				Error:   err.Error(),
-			})
+			c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "Failed to create job", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeInternal, Error: err.Error()})
 			return
 		}
 		h.logger.Error("Unexpected error when creating job", "job_id", jobID, "error", err)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Success: false,
-			Message: "An unexpected error has occurred while creating the job. Please contact support.",
-			Code:    500,
-			Error:   err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "An unexpected error has occurred while creating the job. Please contact support.", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeInternal, Error: err.Error()})
 		return
 	}
 
@@ -174,23 +144,12 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 			h.logger.Error("Failed to cleanup job after upload init error", "job_id", jobID, "error", cleanupErr)
 		}
 		h.logger.Error("Failed to initiate multipart upload", "job_id", jobID, "error", err)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Success: false,
-			Message: "Failed to initiate multipart upload",
-			Code:    500,
-			Error:   err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "Failed to initiate multipart upload", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeDependency, Error: err.Error()})
 		return
 	}
-	// Important in case of failure from this point on to cleanup the multipart upload in MinIO and delete the job in our database,
-	// otherwise we'll have orphaned uploads and jobs that can never be completed.
+
 	cleanupFailedInitiation := func(cause error) {
-		abortErr := h.minioService.AbortMultipartUpload(
-			c.Request.Context(),
-			h.minioService.UploadBucket(),
-			objectName,
-			uploadID,
-		)
+		abortErr := h.minioService.AbortMultipartUpload(c.Request.Context(), h.minioService.UploadBucket(), objectName, uploadID)
 		if abortErr != nil {
 			h.logger.Error("Failed to abort multipart upload during cleanup", "job_id", jobID, "upload_id", uploadID, "error", abortErr)
 		}
@@ -202,52 +161,30 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 	}
 
 	urls := make([]map[string]any, 0, int(totalParts))
-
 	for partNumber := int64(1); partNumber <= totalParts; partNumber++ {
-		url, err := h.minioService.PresignedUploadPartURL(
-			c.Request.Context(),
-			h.minioService.UploadBucket(),
-			objectName,
-			uploadID,
-			int(partNumber),
-			60*time.Minute,
-		)
+		url, err := h.minioService.PresignedUploadPartURL(c.Request.Context(), h.minioService.UploadBucket(), objectName, uploadID, int(partNumber), 60*time.Minute)
 		if err != nil {
 			cleanupFailedInitiation(err)
 			h.logger.Error("Failed to create presigned part URL", "job_id", jobID, "part", partNumber, "error", err)
-			c.JSON(http.StatusInternalServerError, models.ApiMessage{
-				Success: false,
-				Message: "Failed to create presigned part URL",
-				Code:    500,
-				Error:   err.Error(),
-			})
+			c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "Failed to create presigned part URL", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeDependency, Error: err.Error()})
 			return
 		}
 
-		// Store presigned URL in database
 		_, err = h.service.CreatePresignedURL(c.Request.Context(), jobID, url, int32(partNumber))
 		if err != nil {
 			cleanupFailedInitiation(err)
 			h.logger.Error("Failed to store presigned URL", "job_id", jobID, "part", partNumber, "error", err)
-			c.JSON(http.StatusInternalServerError, models.ApiMessage{
-				Success: false,
-				Message: "Failed to store presigned URL",
-				Code:    500,
-				Error:   err.Error(),
-			})
+			c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "Failed to store presigned URL", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeInternal, Error: err.Error()})
 			return
 		}
 
-		urls = append(urls, map[string]any{
-			"part_number": int(partNumber),
-			"url":         url,
-		})
+		urls = append(urls, map[string]any{"part_number": int(partNumber), "url": url})
 	}
 
 	c.JSON(http.StatusOK, models.ApiMessage{
 		Success: true,
 		Message: "Multipart upload initiated",
-		Code:    200,
+		Code:    http.StatusOK,
 		Metadata: map[string]any{
 			"job_id":     jobID,
 			"upload_id":  uploadID,
@@ -272,131 +209,116 @@ func (h *Handler) InitiateMultipartUploadHandler(c *gin.Context) {
 func (h *Handler) CompleteMultipartUploadHandler(c *gin.Context) {
 	var req models.MultipartCompleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ApiMessage{
-			Success: false,
-			Message: "Invalid request payload",
-			Code:    400,
-			Error:   err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, models.ApiMessage{Success: false, Message: "Invalid request payload", Code: http.StatusBadRequest, ErrorCode: models.ErrorCodeValidation, Error: err.Error()})
 		return
 	}
 	if len(req.Parts) == 0 {
-		c.JSON(http.StatusBadRequest, models.ApiMessage{
-			Success: false,
-			Message: "parts cannot be empty",
-			Code:    400,
-		})
+		c.JSON(http.StatusBadRequest, models.ApiMessage{Success: false, Message: "parts cannot be empty", Code: http.StatusBadRequest, ErrorCode: models.ErrorCodeValidation})
 		return
 	}
 
 	job, err := h.service.GetJobByJobID(c.Request.Context(), req.JobID)
 	if err != nil {
 		h.logger.Error("Failed to get job", "job_id", req.JobID, "error", err)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Success: false,
-			Message: "Failed to get job",
-			Code:    500,
-			Error:   err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "Failed to get job", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeInternal, Error: err.Error()})
 		return
 	}
 
 	parts := make([]minio.CompletePart, 0, len(req.Parts))
 	for _, part := range req.Parts {
-		parts = append(parts, minio.CompletePart{
-			PartNumber: part.PartNumber,
-			ETag:       part.ETag,
-		})
+		parts = append(parts, minio.CompletePart{PartNumber: part.PartNumber, ETag: part.ETag})
 	}
 
-	objectName := req.JobID
-	if err := h.minioService.CompleteMultipartUpload(
-		c.Request.Context(),
-		h.minioService.UploadBucket(),
-		objectName,
-		req.UploadID,
-		parts,
-	); err != nil {
+	if err := h.minioService.CompleteMultipartUpload(c.Request.Context(), h.minioService.UploadBucket(), req.JobID, req.UploadID, parts); err != nil {
 		h.logger.Error("Failed to complete multipart upload", "job_id", req.JobID, "error", err)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Success: false,
-			Message: "Failed to complete multipart upload",
-			Code:    500,
-			Error:   err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "Failed to complete multipart upload", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeDependency, Error: err.Error()})
 		return
 	}
 
-	codec := strings.TrimSpace(req.Codec)
-	if codec == "" {
-		codec = "h264"
-	}
-	resolution, err := normalizeResolutionPreset(req.Resolution)
+	metaData, err := h.buildVideoMetadata(job.JobID, req.VideoName, req.Description, req.PresetID, req.Overrides, req.Format, req.Resolution, req.Codec, req.Framerate, req.Duration)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, models.ApiMessage{
-			Success: false,
-			Message: "Invalid resolution",
-			Code:    400,
-			Error:   err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, models.ApiMessage{Success: false, Message: "Invalid preset/overrides", Code: http.StatusBadRequest, ErrorCode: models.ErrorCodePresetOverride, Error: err.Error()})
 		return
 	}
-	metaData := models.VideoMedataReq{
-		JobID:       job.JobID,
-		VideoName:   pkg.TextOrNull(req.VideoName),
-		Description: pkg.TextOrNull(req.Description),
-		Format:      pkg.TextOrNull(req.Format),
-		Bitrate:     pkg.IntOrNull(nil),
-		Resolution:  pkg.TextOrNull(resolution),
-		Codec:       codec,
-		Framerate:   pkg.IntOrNull(req.Framerate),
-		Duration:    pkg.IntOrNull(req.Duration),
-	}
-	_, err = h.service.CreateVideoMeta(c.Request.Context(), metaData)
-	if err != nil {
+
+	if _, err = h.service.CreateVideoMeta(c.Request.Context(), metaData); err != nil {
 		h.logger.Error("Failed to create video metadata", "job_id", req.JobID, "error", err)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Success: false,
-			Message: "Failed to create video metadata",
-			Code:    500,
-			Error:   err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "Failed to create video metadata", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeInternal, Error: err.Error()})
 		return
 	}
-	// We update redis first and then our db. This way, if the redis enqueue fails, we won't have a job in the database that can never be processed because it was never enqueued.
-	err = h.redisService.Enqueue(c.Request.Context(), req.JobID)
-	if err != nil {
+
+	if err := h.redisService.Enqueue(c.Request.Context(), req.JobID); err != nil {
 		h.logger.Error("Failed to enqueue job in redis", "job_id", req.JobID, "error", err)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Success: false,
-			Message: "An error has occured while queuing the job for transcoding. Please contact support.",
-			Code:    500,
-			Error:   err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "An error has occured while queuing the job for transcoding. Please contact support.", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeDependency, Error: err.Error()})
 		return
 	}
-	transitionErr := h.service.TransitionTo(c.Request.Context(), job.JobID, models.StatusPending, models.StatusQueued)
-	if transitionErr != nil {
-		h.logger.Error("Failed to update job status", "job_id", req.JobID, "error", transitionErr)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Success: false,
-			Message: "Failed to update job status",
-			Code:    500,
-			Error:   transitionErr.Error(),
-		})
+	if err := h.service.TransitionTo(c.Request.Context(), job.JobID, models.StatusPending, models.StatusQueued); err != nil {
+		h.logger.Error("Failed to update job status", "job_id", req.JobID, "error", err)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{Success: false, Message: "Failed to update job status", Code: http.StatusInternalServerError, ErrorCode: models.ErrorCodeInvalidState, Error: err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, models.ApiMessage{
 		Success: true,
 		Message: "Multipart upload completed and metadata stored",
-		Code:    200,
+		Code:    http.StatusOK,
 		Metadata: map[string]any{
 			"video_id": req.JobID,
 			"filename": req.VideoName,
 			"status":   "Currently queued for transcoding. It may take a few minutes.",
 		},
 	})
+}
+
+func (h *Handler) buildVideoMetadata(jobID, videoName, description, presetID string, overrides models.PresetOverrides, format, resolution, codec string, framerate, duration *int32) (models.VideoMedataReq, error) {
+	if strings.TrimSpace(presetID) != "" {
+		resolved, err := presets.Resolve(presetID, presets.Overrides{
+			Codec:      overrides.Codec,
+			Resolution: overrides.Resolution,
+			Bitrate:    overrides.Bitrate,
+			Framerate:  overrides.Framerate,
+			Format:     overrides.Format,
+		})
+		if err != nil {
+			return models.VideoMedataReq{}, err
+		}
+		return models.VideoMedataReq{
+			JobID:       jobID,
+			VideoName:   pkg.TextOrNull(videoName),
+			Description: pkg.TextOrNull(description),
+			Format:      pkg.TextOrNull(resolved.Format),
+			Bitrate:     pkg.IntOrNull(intPtr(resolved.Options.Bitrate)),
+			Resolution:  pkg.TextOrNull(resolved.Options.Resolution),
+			Codec:       resolved.Options.Codec,
+			Framerate:   pkg.IntOrNull(intPtr(resolved.Options.Framerate)),
+			Duration:    pkg.IntOrNull(duration),
+		}, nil
+	}
+
+	codec = strings.TrimSpace(codec)
+	if codec == "" {
+		codec = "h264"
+	}
+	res, err := normalizeResolutionPreset(resolution)
+	if err != nil {
+		return models.VideoMedataReq{}, err
+	}
+	return models.VideoMedataReq{
+		JobID:       jobID,
+		VideoName:   pkg.TextOrNull(videoName),
+		Description: pkg.TextOrNull(description),
+		Format:      pkg.TextOrNull(format),
+		Bitrate:     pkg.IntOrNull(overrides.Bitrate),
+		Resolution:  pkg.TextOrNull(res),
+		Codec:       codec,
+		Framerate:   pkg.IntOrNull(framerate),
+		Duration:    pkg.IntOrNull(duration),
+	}, nil
+}
+
+func intPtr(v int32) *int32 {
+	vv := v
+	return &vv
 }
 
 func normalizeResolutionPreset(raw string) (string, error) {

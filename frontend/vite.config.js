@@ -10,6 +10,7 @@ export default defineConfig({
       '/upload': 'http://localhost:8084',
       '/status': 'http://localhost:8084',
       '/jobs': 'http://localhost:8084',
+      '/presets': 'http://localhost:8084',
     }
   }
 })

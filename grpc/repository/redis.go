@@ -23,7 +23,9 @@ type JobStuff struct {
 	StreamMessage string //Need this for ack later.
 }
 
-const reclaimMinIdle = 60 * time.Second
+// Claim only clearly abandoned messages.
+// Normal transcodes can run for several minutes, so a short idle window causes duplicate processing.
+const reclaimMinIdle = 35 * time.Minute
 
 // extractJobID looks for common keys that might contain the job ID and returns the first non-empty value as a string.
 // This allows for flexibility in the structure of the Redis stream messages while still reliably extracting the job ID for processing.

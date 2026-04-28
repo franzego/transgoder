@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/franzego/transgoder/internal/repository"
+	"github.com/franzego/transcoder/internal/repository"
 )
 
 type RedisService struct {

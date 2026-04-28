@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive } from 'vue'
+import { onMounted, reactive, ref, computed } from 'vue'
 import { useJobStore } from '../stores/jobStore'
 import { api } from '../services/api'
 
@@ -8,20 +8,88 @@ const jobStore = useJobStore()
 const fileInput = ref(null)
 const isDragging = ref(false)
 const isUploading = ref(false)
+const showAdvanced = ref(false)
+const presets = ref([])
+const presetLoadError = ref('')
+const isPresetsLoading = ref(false)
 
 const form = reactive({
   file: null,
   videoName: '',
   description: '',
+
+  // Preset-first flow
+  presetId: 'web-h264-v1',
+  overrideCodec: '',
+  overrideResolution: '',
+  overrideBitrate: null,
+  overrideFramerate: null,
+  overrideFormat: '',
+
+  // Legacy/manual fallback fields
   format: 'mp4',
   codec: 'h264',
   resolution: '1080',
   framerate: 30,
   duration: 0,
-  partSize: 64, // MB
-  maxRetries: 3,
-  partTimeout: 30 // Seconds
+
+  // Upload controls
+  partSize: 64,
+  maxRetries: 3
 })
+
+const selectedPreset = computed(() => presets.value.find((p) => p.id === form.presetId) || null)
+
+const selectedPresetDefaults = computed(() => {
+  const p = selectedPreset.value
+  if (!p) return []
+  return [
+    { label: 'Format', value: p.format || 'n/a' },
+    { label: 'Codec', value: p.options?.codec || 'n/a' },
+    { label: 'Resolution', value: p.options?.resolution || 'n/a' },
+    { label: 'Bitrate', value: p.options?.bitrate ? `${p.options.bitrate} kbps` : 'n/a' },
+    { label: 'Framerate', value: p.options?.framerate ? `${p.options.framerate} fps` : 'n/a' }
+  ]
+})
+
+const loadPresets = async () => {
+  isPresetsLoading.value = true
+  presetLoadError.value = ''
+  try {
+    presets.value = await api.getPresets()
+    if (presets.value.length > 0) {
+      if (!presets.value.some((p) => p.id === form.presetId)) {
+        form.presetId = presets.value[0].id
+      }
+      applyPresetToLegacyFallback()
+      return
+    }
+    form.presetId = ''
+  } catch (err) {
+    presets.value = []
+    form.presetId = ''
+    presetLoadError.value = err.message || 'Failed to load presets'
+  } finally {
+    isPresetsLoading.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadPresets()
+})
+
+const applyPresetToLegacyFallback = () => {
+  const preset = selectedPreset.value
+  if (!preset) return
+  if (preset.format) form.format = preset.format
+  if (preset.options?.codec) form.codec = preset.options.codec
+  if (preset.options?.resolution) form.resolution = preset.options.resolution
+  if (preset.options?.framerate) form.framerate = preset.options.framerate
+}
+
+const onPresetChange = () => {
+  applyPresetToLegacyFallback()
+}
 
 const handleFileChange = (e) => {
   const selected = e.target.files[0]
@@ -45,14 +113,24 @@ const triggerFileInput = () => {
   fileInput.value.click()
 }
 
+const buildOverrides = () => {
+  const overrides = {}
+  if (form.overrideCodec) overrides.codec = form.overrideCodec
+  if (form.overrideResolution) overrides.resolution = form.overrideResolution
+  if (form.overrideBitrate && Number(form.overrideBitrate) > 0) overrides.bitrate = Number(form.overrideBitrate)
+  if (form.overrideFramerate && Number(form.overrideFramerate) > 0) overrides.framerate = Number(form.overrideFramerate)
+  if (form.overrideFormat) overrides.format = form.overrideFormat
+  return overrides
+}
+
 const startUpload = async () => {
-  if (!form.file) return
-  
+  if (!form.file || isUploading.value) return
+  isUploading.value = true
+
   const tempId = `upload_${Date.now()}`
   const videoName = form.videoName
   const uploadFile = form.file
-  
-  // Add to store immediately
+
   jobStore.addJob({
     id: tempId,
     name: videoName,
@@ -60,88 +138,84 @@ const startUpload = async () => {
     progress: 0
   })
 
-  // Local copy of config to prevent changes while uploading
   const config = { ...form }
-  
-  // Reset form for next upload
   form.file = null
   form.videoName = ''
   form.description = ''
 
   try {
-    // 1. Initiate
     const initRes = await api.initiateUpload({
       fileName: uploadFile.name,
       fileSize: uploadFile.size,
       partSize: config.partSize * 1024 * 1024
     })
-    
+
     const { job_id, upload_id, parts, part_size } = initRes.metadata
-    
-    // Update store with real job_id, but we might need to handle the ID change
-    // For simplicity, we keep the job in the same slot but update its real ID
+
     jobStore.activeJobs[tempId].id = job_id
     jobStore.updateJob(tempId, { status: 'uploading' })
 
-    // 2. Upload parts
     const completedParts = []
     const totalParts = parts.length
-    
+
     for (const part of parts) {
       const start = (part.part_number - 1) * part_size
       const end = Math.min(start + part_size, uploadFile.size)
       const blob = uploadFile.slice(start, end)
-      
+
       let retryCount = 0
       let success = false
-      
+
       while (!success && retryCount <= config.maxRetries) {
         try {
           const { etag } = await api.uploadPart(part.url, blob)
           completedParts.push({ part_number: part.part_number, etag })
           success = true
-          
+
           const progress = Math.round((completedParts.length / totalParts) * 100)
           jobStore.updateJob(tempId, { progress })
         } catch (err) {
           retryCount++
           if (retryCount > config.maxRetries) throw err
-          await new Promise(r => setTimeout(r, 1000 * retryCount))
+          await new Promise((r) => setTimeout(r, 1000 * retryCount))
         }
       }
     }
 
-    // 3. Complete
     await api.completeUpload({
       job_id,
       upload_id,
       parts: completedParts,
       video_name: videoName,
       description: config.description,
+      preset_id: presets.value.some((p) => p.id === config.presetId) ? config.presetId : '',
+      overrides: buildOverrides(),
+
+      // backward-compatible fallback fields
       format: config.format,
       resolution: config.resolution,
       codec: config.codec,
-      framerate: parseInt(config.framerate),
-      duration: parseInt(config.duration)
+      framerate: parseInt(config.framerate || 0),
+      duration: parseInt(config.duration || 0)
     })
 
     jobStore.updateJob(tempId, { status: 'queued', progress: 55 })
-    // Move from tempId to real job_id in store for polling consistency
     const jobData = { ...jobStore.activeJobs[tempId], id: job_id }
     delete jobStore.activeJobs[tempId]
     jobStore.activeJobs[job_id] = jobData
-    
-    jobStore.startPolling(job_id)
 
+    jobStore.startPolling(job_id)
   } catch (err) {
     jobStore.updateJob(tempId, { error: err.message, status: 'failed' })
+  } finally {
+    isUploading.value = false
   }
 }
 </script>
 
 <template>
   <div class="upload-card">
-    <div 
+    <div
       class="drop-zone"
       :class="{ 'is-dragging': isDragging }"
       @dragover.prevent="isDragging = true"
@@ -149,14 +223,14 @@ const startUpload = async () => {
       @drop.prevent="handleDrop"
       @click="triggerFileInput"
     >
-      <input 
-        type="file" 
-        ref="fileInput" 
-        class="hidden" 
+      <input
+        type="file"
+        ref="fileInput"
+        class="hidden"
         @change="handleFileChange"
         accept="video/*"
       />
-      
+
       <div v-if="!form.file" class="drop-content">
         <div class="drop-icon">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -168,7 +242,7 @@ const startUpload = async () => {
         <h3>Select a video file</h3>
         <p>Drag and drop or click to browse</p>
       </div>
-      
+
       <div v-else class="selected-file">
         <div class="file-info">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -193,54 +267,89 @@ const startUpload = async () => {
         <textarea v-model="form.description" placeholder="A brief description of the content..."></textarea>
       </div>
 
-      <div class="form-group">
-        <label>Format</label>
-        <select v-model="form.format">
-          <option value="mp4">MP4</option>
-          <option value="mov">MOV</option>
+      <div class="form-group full-width">
+        <label>Preset</label>
+        <select v-model="form.presetId" @change="onPresetChange" :disabled="isPresetsLoading || presets.length === 0">
+          <option v-if="isPresetsLoading" value="">Loading presets...</option>
+          <option v-else-if="presets.length === 0" value="">No presets available</option>
+          <option v-for="p in presets" :key="p.id" :value="p.id">
+            {{ p.name }} ({{ p.id }})
+          </option>
         </select>
-      </div>
-
-      <div class="form-group">
-        <label>Codec</label>
-        <select v-model="form.codec">
-          <option value="h264">H.264 (AVC)</option>
-          <option value="h265">H.265 (HEVC)</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label>Resolution</label>
-        <select v-model="form.resolution">
-          <option value="1080">1080p</option>
-          <option value="720">720p</option>
-          <option value="480">480p</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label>Framerate (FPS)</label>
-        <input type="number" v-model="form.framerate" min="1" max="120" />
+        <small v-if="isPresetsLoading" class="hint">Loading available presets...</small>
+        <small v-else-if="presetLoadError" class="hint error">
+          {{ presetLoadError }}
+          <button class="retry-btn" type="button" @click="loadPresets">Retry</button>
+        </small>
+        <small v-else-if="presets.length === 0" class="hint">No presets available. You can still use manual fallback settings.</small>
+        <div v-if="selectedPreset" class="preset-details">
+          <p class="preset-description">{{ selectedPreset.description }}</p>
+          <div class="preset-defaults">
+            <span v-for="item in selectedPresetDefaults" :key="item.label" class="preset-pill">
+              {{ item.label }}: {{ item.value }}
+            </span>
+          </div>
+        </div>
       </div>
 
       <div class="advanced-toggle" @click="showAdvanced = !showAdvanced">
         <span>Advanced Settings</span>
-        <svg :class="{ 'rotated': showAdvanced }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        <svg :class="{ rotated: showAdvanced }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
       </div>
 
       <template v-if="showAdvanced">
         <div class="form-group">
+          <label>Override Codec</label>
+          <select v-model="form.overrideCodec">
+            <option value="">(none)</option>
+            <option value="h264">H.264</option>
+            <option value="h265">H.265</option>
+            <option value="vp9">VP9</option>
+            <option value="av1">AV1</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Override Resolution</label>
+          <select v-model="form.overrideResolution">
+            <option value="">(none)</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+            <option value="480">480p</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Override Bitrate (kbps)</label>
+          <input type="number" v-model="form.overrideBitrate" min="1" />
+        </div>
+
+        <div class="form-group">
+          <label>Override Framerate</label>
+          <input type="number" v-model="form.overrideFramerate" min="1" max="120" />
+        </div>
+
+        <div class="form-group">
+          <label>Override Format</label>
+          <select v-model="form.overrideFormat">
+            <option value="">(none)</option>
+            <option value="mp4">MP4</option>
+            <option value="mov">MOV</option>
+          </select>
+        </div>
+
+        <div class="form-group">
           <label>Part Size (MB)</label>
           <input type="number" v-model="form.partSize" min="5" />
         </div>
+
         <div class="form-group">
-          <label>Max Retries</label>
+          <label>Max Upload Retries</label>
           <input type="number" v-model="form.maxRetries" min="0" />
         </div>
-        <div class="form-group">
-          <label>Part Timeout (s)</label>
-          <input type="number" v-model="form.partTimeout" min="5" />
-        </div>
+
         <div class="form-group">
           <label>Duration (s)</label>
           <input type="number" v-model="form.duration" min="0" />
@@ -248,27 +357,12 @@ const startUpload = async () => {
       </template>
     </div>
 
-    <button 
-      class="btn-primary" 
-      :disabled="!form.file || isUploading"
-      @click="startUpload"
-    >
+    <button class="btn-primary" :disabled="!form.file || isUploading" @click="startUpload">
       <span v-if="!isUploading">Start Transcoding</span>
       <span v-else>Preparing Upload...</span>
     </button>
   </div>
 </template>
-
-<script>
-// Non-setup part for simple data
-export default {
-  data() {
-    return {
-      showAdvanced: false
-    }
-  }
-}
-</script>
 
 <style scoped>
 .upload-card {
@@ -292,7 +386,8 @@ export default {
   background-color: var(--bg-color);
 }
 
-.drop-zone:hover, .drop-zone.is-dragging {
+.drop-zone:hover,
+.drop-zone.is-dragging {
   border-color: var(--accent-color);
   background-color: var(--accent-soft);
 }
@@ -372,7 +467,9 @@ label {
   color: var(--text-secondary);
 }
 
-input, select, textarea {
+input,
+select,
+textarea {
   padding: 0.75rem;
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -381,7 +478,9 @@ input, select, textarea {
   transition: border-color var(--transition-speed);
 }
 
-input:focus, select:focus, textarea:focus {
+input:focus,
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--accent-color);
 }
@@ -389,6 +488,52 @@ input:focus, select:focus, textarea:focus {
 textarea {
   min-height: 80px;
   resize: vertical;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.hint.error {
+  color: #b91c1c;
+}
+
+.retry-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent-color);
+  margin-left: 0.5rem;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.preset-details {
+  margin-top: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.preset-description {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.preset-defaults {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.preset-pill {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--accent-soft);
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.15);
 }
 
 .advanced-toggle {

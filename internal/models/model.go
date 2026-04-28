@@ -16,6 +16,16 @@ const (
 	StatusCancelled   Status = "cancelled"
 )
 
+const (
+	ErrorCodeValidation      = "VALIDATION_ERROR"
+	ErrorCodeDependency      = "DEPENDENCY_ERROR"
+	ErrorCodeInvalidState    = "INVALID_STATE"
+	ErrorCodeInternal        = "INTERNAL_ERROR"
+	ErrorCodePresetNotFound  = "PRESET_NOT_FOUND"
+	ErrorCodePresetOverride  = "PRESET_OVERRIDE_INVALID"
+	ErrorCodeTranscodeFailed = "TRANSCODE_FAILED"
+)
+
 type UpdateStatusRequest struct {
 	JobID string `json:"id" validate:"required"`
 	From  Status `json:"from" validate:"required,oneof=pending queued downloading processing uploading completed failed cancelled"`
@@ -23,14 +33,24 @@ type UpdateStatusRequest struct {
 }
 
 type ApiMessage struct {
-	Success  bool   `json:"success"`
-	Message  string `json:"message"`
-	Code     int    `json:"code"`
-	Error    string `json:"error,omitempty"`
-	Metadata any    `json:"metadata,omitempty"`
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Metadata  any    `json:"metadata,omitempty"`
 }
+
 type JobStatusResponse struct {
 	Status string `json:"status"`
+}
+
+type PresetOverrides struct {
+	Codec      *string `json:"codec,omitempty"`
+	Resolution *string `json:"resolution,omitempty"`
+	Bitrate    *int32  `json:"bitrate,omitempty"`
+	Framerate  *int32  `json:"framerate,omitempty"`
+	Format     *string `json:"format,omitempty"`
 }
 
 type MultipartInitiateRequest struct {
@@ -50,11 +70,22 @@ type MultipartCompleteRequest struct {
 	Parts       []MultipartUploadPart `json:"parts" binding:"required"`
 	VideoName   string                `json:"video_name"`
 	Description string                `json:"description"`
-	Format      string                `json:"format" binding:"required"` // mp4 or mov
-	Resolution  string                `json:"resolution"`                 // preset: 480, 720, 1080
-	Codec       string                `json:"codec"`                     // h.264 or h.265
-	Framerate   *int32                `json:"framerate"`                 // 1920x1080
+	PresetID    string                `json:"preset_id,omitempty"`
+	Overrides   PresetOverrides       `json:"overrides,omitempty"`
+	Format      string                `json:"format"`
+	Resolution  string                `json:"resolution"`
+	Codec       string                `json:"codec"`
+	Framerate   *int32                `json:"framerate"`
 	Duration    *int32                `json:"duration"`
+}
+
+type CreateJobRequest struct {
+	JobID       string          `json:"job_id,omitempty"`
+	VideoName   string          `json:"video_name" binding:"required"`
+	Description string          `json:"description,omitempty"`
+	PresetID    string          `json:"preset_id" binding:"required"`
+	Overrides   PresetOverrides `json:"overrides,omitempty"`
+	Duration    *int32          `json:"duration,omitempty"`
 }
 
 type VideoMedataReq struct {

@@ -4,9 +4,10 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 
-	"github.com/franzego/transgoder/internal/models"
-	"github.com/franzego/transgoder/internal/sqlc"
+	"github.com/franzego/transcoder/internal/models"
+	"github.com/franzego/transcoder/internal/sqlc"
 )
 
 var validTransitions = map[models.Status][]models.Status{
@@ -33,6 +34,26 @@ func canTransition(from, to models.Status) bool {
 
 // TransitionTo attempts to transition a job from current status to new status, returning an error if the transition is invalid.
 func (r *RepoService) TransitionTo(ctx context.Context, jobId string, from, to models.Status) error {
+	job, err := r.repo.Q.GetJobByJobID(ctx, jobId)
+	if err != nil {
+		return &ServiceError{
+			Err:     err,
+			Code:    http.StatusInternalServerError,
+			Message: "Failed to get job",
+		}
+	}
+	current := models.Status(strings.ToLower(strings.TrimSpace(job.Status)))
+
+	if current == to {
+		return nil
+	}
+	if current != from {
+		return &ServiceError{
+			Err:     ErrStaleTransition,
+			Code:    http.StatusConflict,
+			Message: "Transition does not match current job status",
+		}
+	}
 	if !canTransition(from, to) {
 		return &ServiceError{
 			Err:     ErrInvalidTransition,
@@ -40,7 +61,7 @@ func (r *RepoService) TransitionTo(ctx context.Context, jobId string, from, to m
 			Message: "Invalid transition was attempted",
 		}
 	}
-	_, err := r.repo.Q.UpdateJobStatus(ctx, sqlc.UpdateJobStatusParams{
+	_, err = r.repo.Q.UpdateJobStatus(ctx, sqlc.UpdateJobStatusParams{
 		JobID:  jobId,
 		Status: string(to),
 	})

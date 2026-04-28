@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -14,6 +16,7 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/franzego/transcoder/grpc/connection"
+	"github.com/franzego/transcoder/grpc/retry"
 	pb "github.com/franzego/transcoder/grpc/server"
 	"github.com/franzego/transcoder/grpc/webserver"
 	"google.golang.org/grpc/codes"
@@ -32,21 +35,14 @@ type TranscoderService struct {
 	downloadBucket string
 	ffmpegPath     string
 	ffprobePath    string
+	retryer        *retry.Retry
 }
 
 const defaultTranscodeTimeout = 30 * time.Minute
 
 func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, minioClient *connection.MinioClient, downloadBucket, ffmpegPath, ffprobePath string) *TranscoderService {
 	if logger == nil {
-		ts := &TranscoderService{
-			logger:         logger,
-			wc:             wc,
-			uploader:       minioClient,
-			downloadBucket: downloadBucket,
-			ffmpegPath:     ffmpegPath,
-			ffprobePath:    ffprobePath,
-		}
-		return ts
+		logger = slog.Default()
 	}
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
@@ -61,9 +57,10 @@ func NewTranscoderService(logger *slog.Logger, wc *webserver.WebserverClient, mi
 		downloadBucket: downloadBucket,
 		ffmpegPath:     ffmpegPath,
 		ffprobePath:    ffprobePath,
+		retryer:        retry.NewRetry(),
 	}
-
 }
+
 func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.TranscodeRequest) (*pb.TranscodeResponse, error) {
 	if req.GetJobId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "job_id is required")
@@ -77,7 +74,23 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 	if s.downloadBucket == "" {
 		return nil, status.Error(codes.FailedPrecondition, "download bucket is required")
 	}
-
+	// we will get the transcode options here
+	transcodeOptions, err := s.wc.GetTranscodeProfile(ctx, req.JobId)
+	if err != nil {
+		s.logger.Error("Failed fetching transcode profile", "job_id", req.JobId, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to fetch transcode profile: %v", err)
+	}
+	outFormat := strings.ToLower(anyToString(transcodeOptions["format"]))
+	request := &pb.TranscodeRequest{
+		JobId:        req.GetJobId(),
+		OutputFormat: outFormat,
+		Options: &pb.VideoOptions{
+			Codec:      anyToString(transcodeOptions["codec"]),
+			Bitrate:    anyToInt32(transcodeOptions["bitrate"]),
+			Framerate:  anyToInt32(transcodeOptions["framerate"]),
+			Resolution: anyToString(transcodeOptions["resolution"]),
+		},
+	}
 	start := time.Now()
 	jobID := req.GetJobId()
 	currentStatus := webserver.StatusQueued
@@ -90,120 +103,100 @@ func (s *TranscoderService) TranscodeVideo(ctx context.Context, req *pb.Transcod
 		objectKey = fmt.Sprintf("%s.%s", jobID, outputFormat)
 	}
 	localOutputPath := filepath.Join("/tmp", objectKey)
-	slogg := s.logger
-	if slogg == nil {
-		slogg = slog.Default()
-	}
-	slogg.Info(
-		"Transcode job started",
-		"job_id", jobID,
-		"output_format", outputFormat,
-		"object_key", objectKey,
-		"timeout_seconds", int(defaultTranscodeTimeout.Seconds()),
-	)
 
-	slogg.Info("Transitioning job status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusDownloading)
+	s.logger.Info("Transcode job started", "job_id", jobID, "output_format", outputFormat, "object_key", objectKey)
+
 	if err := s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusDownloading); err != nil {
-		slogg.Error("Failed transitioning status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusDownloading, "error", err)
+		s.logger.Error("Failed transitioning status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusDownloading, "error", err, "failure_reason", "status_update_failed")
 		return nil, status.Errorf(codes.Internal, "failed to update job status to downloading: %v", err)
 	}
 	currentStatus = webserver.StatusDownloading
 
-	// This is the presigned url for that particular jobid that will use to  download the videofile from minio to local tmp storage for transcoding
-	// This should be carried out with a retry logic
 	transcodeCtx, cancel := context.WithTimeout(ctx, defaultTranscodeTimeout)
 	defer cancel()
 
-	slogg.Info("Fetching source URL", "job_id", jobID)
 	inputURL, err := s.wc.GetSourceURL(transcodeCtx, jobID)
 	if err != nil {
-		slogg.Error("Failed fetching source URL", "job_id", jobID, "error", err)
+		s.logger.Error("Failed fetching source URL", "job_id", jobID, "error", err, "failure_reason", "source_url_fetch_failed")
 		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
 		return nil, status.Errorf(codes.Internal, "failed to fetch source url: %v", err)
 	}
-	slogg.Info("Source URL fetched", "job_id", jobID)
-	// we validate that video source using ffprobe.
-	slogg.Info("Validating source with ffprobe", "job_id", jobID, "ffprobe_path", s.ffprobePath)
+
 	if err := s.validateSourceVideo(transcodeCtx, inputURL); err != nil {
-		slogg.Error("Source validation failed", "job_id", jobID, "error", err)
+		s.logger.Error("Source validation failed", "job_id", jobID, "error", err, "failure_reason", "source_validation_failed")
 		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
 		return nil, status.Errorf(codes.InvalidArgument, "source video validation failed: %v", err)
 	}
-	slogg.Info("Source validation succeeded", "job_id", jobID)
 
-	slogg.Info("Transitioning job status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusProcessing)
 	if err := s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusProcessing); err != nil {
-		slogg.Error("Failed transitioning status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusProcessing, "error", err)
+		s.logger.Error("Failed transitioning status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusProcessing, "error", err, "failure_reason", "status_update_failed")
 		return nil, status.Errorf(codes.Internal, "failed to update job status to processing: %v", err)
 	}
 	currentStatus = webserver.StatusProcessing
 
-	// the transcoding will happen here. We will use ffmpeg for transcoding and execute it as a subprocess.
-	// The input will be the presigned url and the output will be stored in local tmp storage before uploading it back to minio.
-	ffmpegArgs := buildFFmpegArgs(inputURL, localOutputPath, req)
-	slogg.Info(
-		"Starting ffmpeg transcode",
-		"job_id", jobID,
-		"ffmpeg_path", s.ffmpegPath,
-		"output_path", localOutputPath,
-		"args_count", len(ffmpegArgs),
-	)
-	cmd := exec.CommandContext(transcodeCtx, s.ffmpegPath, ffmpegArgs...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		slogg.Error("ffmpeg transcode failed", "job_id", jobID, "error", err, "ffmpeg_output", string(output))
+	ffmpegArgs := buildFFmpegArgs(inputURL, localOutputPath, request)
+	if err := s.runFFmpegWithRetry(transcodeCtx, ffmpegArgs); err != nil {
+		s.logger.Error("ffmpeg transcode failed", "job_id", jobID, "error", err, "failure_reason", "ffmpeg_failed")
 		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
-		return nil, status.Errorf(codes.Internal, "ffmpeg failed: %v, output=%s", err, string(output))
+		return nil, status.Errorf(codes.Internal, "ffmpeg failed: %v", err)
 	}
-	slogg.Info("ffmpeg transcode completed", "job_id", jobID)
 
-	slogg.Info("Transitioning job status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusUploading)
 	if err := s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusUploading); err != nil {
-		slogg.Error("Failed transitioning status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusUploading, "error", err)
+		s.logger.Error("Failed transitioning status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusUploading, "error", err, "failure_reason", "status_update_failed")
 		return nil, status.Errorf(codes.Internal, "failed to update job status to uploading: %v", err)
 	}
 	currentStatus = webserver.StatusUploading
-	// we have to upload back to minio.
-	// would have loved to have a different function for that.
-	// But to keep the code simple and avoid too many abstractions, I am doing it in the same function for now.
-	slogg.Info("Uploading output to MinIO", "job_id", jobID, "bucket", s.downloadBucket, "object_key", objectKey)
-	if err := s.uploadOutput(ctx, localOutputPath, objectKey, outputFormat); err != nil {
-		slogg.Error("MinIO upload failed", "job_id", jobID, "bucket", s.downloadBucket, "object_key", objectKey, "error", err)
+
+	if err := s.retryer.DoWithCheck(ctx, "upload_output", func() error {
+		return s.uploadOutput(ctx, localOutputPath, objectKey, outputFormat)
+	}, func(err error) bool {
+		return err != nil
+	}); err != nil {
+		s.logger.Error("MinIO upload failed", "job_id", jobID, "bucket", s.downloadBucket, "object_key", objectKey, "error", err, "failure_reason", "upload_failed")
 		_ = s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusFailed)
 		return nil, status.Errorf(codes.Internal, "failed to upload transcoded output to minio: %v", err)
 	}
-	slogg.Info("MinIO upload completed", "job_id", jobID, "bucket", s.downloadBucket, "object_key", objectKey)
 
-	slogg.Info("Transitioning job status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusCompleted)
 	if err := s.transitionStatus(ctx, jobID, currentStatus, webserver.StatusCompleted); err != nil {
-		slogg.Error("Failed transitioning status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusCompleted, "error", err)
+		s.logger.Error("Failed transitioning status", "job_id", jobID, "from", currentStatus, "to", webserver.StatusCompleted, "error", err, "failure_reason", "status_update_failed")
 		return nil, status.Errorf(codes.Internal, "failed to update job status to completed: %v", err)
 	}
-	slogg.Info("Transcode job completed", "job_id", jobID, "duration_ms", time.Since(start).Milliseconds(), "output_path", objectKey)
 
+	s.logger.Info("Transcode job completed", "job_id", jobID, "duration_ms", time.Since(start).Milliseconds(), "output_path", objectKey)
 	return &pb.TranscodeResponse{
 		JobId:      jobID,
 		Status:     "completed",
 		Success:    true,
-		OutputPath: objectKey, // this is the key/url that will be used to download the transcoded video from minio to the client.
+		OutputPath: objectKey,
 		DurationMs: time.Since(start).Milliseconds(),
 	}, nil
 }
 
-func (s *TranscoderService) transitionStatus(ctx context.Context, jobID string, from, to webserver.Status) error {
-	_, err := s.wc.UpdateJobStatus(ctx, webserver.JobStatusReq{
-		JobID: jobID,
-		From:  from,
-		To:    to,
+func (s *TranscoderService) runFFmpegWithRetry(ctx context.Context, ffmpegArgs []string) error {
+	// Retry only process start/transport faults; do not retry deterministic ffmpeg exit failures.
+	return s.retryer.DoWithCheck(ctx, "ffmpeg_transcode", func() error {
+		cmd := exec.CommandContext(ctx, s.ffmpegPath, ffmpegArgs...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("ffmpeg error: %w, output=%s", err, string(output))
+		}
+		return nil
+	}, func(err error) bool {
+		if err == nil {
+			return false
+		}
+		var exitErr *exec.ExitError
+		return !errors.As(err, &exitErr)
 	})
+}
+
+func (s *TranscoderService) transitionStatus(ctx context.Context, jobID string, from, to webserver.Status) error {
+	_, err := s.wc.UpdateJobStatus(ctx, webserver.JobStatusReq{JobID: jobID, From: from, To: to})
 	return err
 }
 
 func buildFFmpegArgs(inputPath, outputPath string, req *pb.TranscodeRequest) []string {
-	args := []string{
-		"-y",
-		"-i", inputPath,
-	}
+	args := []string{"-y", "-i", inputPath}
 	if opts := req.GetOptions(); opts != nil {
 		if opts.GetCodec() != "" {
 			switch opts.GetCodec() {
@@ -287,4 +280,56 @@ func (s *TranscoderService) validateSourceVideo(ctx context.Context, inputURL st
 		return fmt.Errorf("ffprobe produced empty output")
 	}
 	return nil
+}
+
+// Direct type assertions from untyped maps can panic if the data is not in the expected format.
+func anyToInt32(v any) int32 {
+	if v == nil {
+		return 0
+	}
+	switch t := v.(type) {
+	case int32:
+		return t
+	case int64:
+		return int32(t)
+	case int:
+		return int32(t)
+	case float64:
+		return int32(t)
+	case json.Number:
+		if i64, err := t.Int64(); err == nil {
+			return int32(i64)
+		}
+		if f64, err := t.Float64(); err == nil {
+			return int32(f64)
+		}
+		return 0
+	default:
+		// fallback: try to parse from string
+		s := fmt.Sprint(t)
+		if i64, err := strconv.ParseInt(s, 10, 32); err == nil {
+			return int32(i64)
+		}
+		if f64, err := strconv.ParseFloat(s, 64); err == nil {
+			return int32(f64)
+		}
+		return 0
+	}
+}
+
+func anyToString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	case json.Number:
+		return t.String()
+	default:
+		return fmt.Sprint(t)
+	}
+
 }

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franzego/transgoder/internal/config"
-	"github.com/franzego/transgoder/internal/connection"
+	"github.com/franzego/transcoder/internal/config"
+	"github.com/franzego/transcoder/internal/connection"
 	"github.com/redis/go-redis/v9"
 )
 

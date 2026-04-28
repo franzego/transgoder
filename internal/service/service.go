@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/franzego/transgoder/internal/models"
-	"github.com/franzego/transgoder/internal/repository"
-	"github.com/franzego/transgoder/internal/sqlc"
+	"github.com/franzego/transcoder/internal/models"
+	"github.com/franzego/transcoder/internal/repository"
+	"github.com/franzego/transcoder/internal/sqlc"
 )
 
 type RepoService struct {

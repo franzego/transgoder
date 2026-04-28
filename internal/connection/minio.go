@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/franzego/transgoder/internal/config"
+	"github.com/franzego/transcoder/internal/config"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )

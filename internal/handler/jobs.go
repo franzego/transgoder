@@ -2,13 +2,15 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	transcoderpb "github.com/franzego/transcoder/grpc/server"
-	"github.com/franzego/transgoder/internal/models"
+	"github.com/franzego/transcoder/internal/models"
+	"github.com/franzego/transcoder/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -46,10 +48,22 @@ func (h *Handler) UpdateStatus(c *gin.Context) {
 	}
 	if err := h.service.TransitionTo(c, req.JobID, req.From, req.To); err != nil {
 		h.logger.Error("failed to transition status", "error", err)
-		c.JSON(http.StatusInternalServerError, models.ApiMessage{
-			Message: fmt.Sprintf("Failed to transition status: %s -> %s", req.From, req.To),
-			Success: false,
-			Code:    http.StatusInternalServerError,
+		statusCode := http.StatusInternalServerError
+		errorCode := models.ErrorCodeInternal
+		if serr := new(service.ServiceError); errors.As(err, &serr) {
+			if serr.Code >= 400 {
+				statusCode = serr.Code
+			}
+			if statusCode == http.StatusBadRequest || statusCode == http.StatusConflict {
+				errorCode = models.ErrorCodeInvalidState
+			}
+		}
+		c.JSON(statusCode, models.ApiMessage{
+			Message:   fmt.Sprintf("Failed to transition status: %s -> %s", req.From, req.To),
+			Success:   false,
+			Code:      statusCode,
+			ErrorCode: errorCode,
+			Error:     err.Error(),
 		})
 		return
 	}
@@ -318,4 +332,53 @@ func (h *Handler) resolveOutputURL(c *gin.Context, jobID string) (string, string
 		return "", "", err
 	}
 	return objectKey, outputURL, nil
+}
+
+// GetTranscodeProfile godoc
+// @Summary Get transcode profile
+// @Description Retrieve resolved transcode parameters for a job (used by workers)
+// @Tags jobs
+// @Produce json
+// @Param id path string true "Job ID"
+// @Success 200 {object} models.ApiMessage
+// @Failure 500 {object} models.ApiMessage
+// @Router /jobs/{id}/transcode-profile [get]
+func (h *Handler) GetTranscodeProfile(c *gin.Context) {
+	jobID := c.Param("id")
+	meta, err := h.service.GetVideoMetaByJobID(c.Request.Context(), jobID)
+	if err != nil {
+		h.logger.Error("failed to get video metadata", "error", err, "job_id", jobID)
+		c.JSON(http.StatusInternalServerError, models.ApiMessage{
+			Message:   "Failed to get video metadata",
+			Success:   false,
+			Code:      http.StatusInternalServerError,
+			ErrorCode: models.ErrorCodeInternal,
+		})
+		return
+	}
+
+	payload := map[string]any{
+		"job_id":     jobID,
+		"format":     strings.ToLower(meta.Format.String),
+		"codec":      meta.Codec,
+		"bitrate":    int32(0),
+		"resolution": meta.Resolution.String,
+		"framerate":  meta.Framerate.Int32,
+	}
+	if meta.Resolution.Valid {
+		payload["resolution"] = meta.Resolution.String
+	}
+	if meta.Bitrate.Valid {
+		payload["bitrate"] = meta.Bitrate.Int32
+	}
+	if meta.Framerate.Valid {
+		payload["framerate"] = meta.Framerate.Int32
+	}
+
+	c.JSON(http.StatusOK, models.ApiMessage{
+		Message:  "Transcode profile fetched",
+		Success:  true,
+		Code:     http.StatusOK,
+		Metadata: payload,
+	})
 }

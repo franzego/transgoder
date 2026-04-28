@@ -3,12 +3,13 @@ package retry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"net"
 	"time"
 
-	"github.com/franzego/transcoder/grpc/webserver"
+	"github.com/franzego/transcoder/grpc/weberror"
 )
 
 type Retry struct {
@@ -21,8 +22,6 @@ type Retry struct {
 }
 
 func NewRetry() *Retry {
-	// I need this for the jitter. Jitter is supposed to include some form of randomness to prevet retry storms.
-	// So I am using a random number generator with a seed based on the current time.
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	return &Retry{
@@ -34,20 +33,20 @@ func NewRetry() *Retry {
 		randomIntn:       rnd.Int63n,
 	}
 }
+
 func (r *Retry) backoff(attempt int) time.Duration {
 	exponential := math.Pow(2, float64(attempt))
 	backoffDuration := time.Duration(float64(r.InitialBackoff) * exponential)
 	if backoffDuration > r.MaxBackoff {
 		backoffDuration = r.MaxBackoff
 	}
-	backoffDuration += time.Duration(r.randomIntn(r.Jitter.Nanoseconds()))
+	if r.Jitter > 0 && r.randomIntn != nil {
+		backoffDuration += time.Duration(r.randomIntn(r.Jitter.Nanoseconds()))
+	}
 
 	return backoffDuration
 }
 
-// Context is important to respect cancellations and timeouts, especially in a payment processing system where we don't want to keep retrying indefinitely
-//
-//	if the client has already given up or if the request has timed out.
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -68,7 +67,7 @@ func isRetryableError(err error) bool {
 		return false
 	}
 
-	var webErr *webserver.RequestError
+	var webErr *weberror.RequestError
 	if errors.As(err, &webErr) {
 		return webErr.Retryable()
 	}
@@ -79,4 +78,46 @@ func isRetryableError(err error) bool {
 	}
 
 	return false
+}
+
+func (r *Retry) Do(ctx context.Context, operation string, fn func() error) error {
+	return r.DoWithCheck(ctx, operation, fn, isRetryableError)
+}
+
+func (r *Retry) DoWithCheck(ctx context.Context, operation string, fn func() error, retryable func(error) bool) error {
+	if r == nil {
+		return fmt.Errorf("retry: nil config")
+	}
+	if fn == nil {
+		return fmt.Errorf("retry: nil function")
+	}
+	if retryable == nil {
+		retryable = isRetryableError
+	}
+
+	attempts := r.MaxRetries + 1
+	if attempts <= 0 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			if err := r.sleepwithcontext(ctx, r.backoff(attempt-1)); err != nil {
+				return err
+			}
+		}
+
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		if !retryable(err) {
+			return fmt.Errorf("%s failed (non-retryable): %w", operation, err)
+		}
+	}
+
+	return fmt.Errorf("%s failed after %d attempts: %w", operation, attempts, lastErr)
 }
