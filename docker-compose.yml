@@ -32,6 +32,12 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:9000/minio/health/ready >/dev/null 2>&1 || curl -fsS http://localhost:9000/minio/health/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
     volumes:
       - minio-data:/data
 
@@ -52,8 +58,10 @@ services:
       FFMPEG_PATH: /usr/bin/ffmpeg
       FFPROBE_PATH: /usr/bin/ffprobe
     depends_on:
-      - redis
-      - minio
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
     ports:
       - "8099:8099"
 
@@ -75,10 +83,14 @@ services:
       MINIO_ENDPOINT: minio:9000
       FFMPEG_PATH: /usr/bin/ffmpeg
     depends_on:
-      - postgres
-      - redis
-      - minio
-      - grpc
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      grpc:
+        condition: service_started
     ports:
       - "8084:8084"
 

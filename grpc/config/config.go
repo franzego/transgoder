@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -52,12 +53,15 @@ type RedisConfig struct {
 }
 
 type MinioConfig struct {
-	Endpoint       string
-	AccessKey      string
-	SecretKey      string
-	UseSSL         bool
-	UploadBucket   string
-	DownloadBucket string
+	Endpoint              string
+	AccessKey             string
+	SecretKey             string
+	UseSSL                bool
+	UploadBucket          string
+	DownloadBucket        string
+	ConnectMaxAttempts    int
+	ConnectInitialBackoff time.Duration
+	ConnectMaxBackoff     time.Duration
 }
 
 type JWTConfig struct {
@@ -99,12 +103,15 @@ func Load() (*Config, error) {
 			GroupName:  getEnv("REDIS_GROUP_NAME", "transcoder_group"),
 		},
 		Minio: MinioConfig{
-			Endpoint:       getEnv("MINIO_ENDPOINT", "localhost:9000"),
-			AccessKey:      getEnv("MINIO_ACCESS_KEY", "minioadmin"),
-			SecretKey:      getEnv("MINIO_SECRET_KEY", "minioadmin"),
-			UseSSL:         getEnvBool("MINIO_USE_SSL", false),
-			UploadBucket:   getEnv("MINIO_UPLOAD_BUCKET", "uploads"),
-			DownloadBucket: getEnv("MINIO_DOWNLOAD_BUCKET", "downloads"),
+			Endpoint:              getEnv("MINIO_ENDPOINT", "localhost:9000"),
+			AccessKey:             getEnv("MINIO_ACCESS_KEY", "minioadmin"),
+			SecretKey:             getEnv("MINIO_SECRET_KEY", "minioadmin"),
+			UseSSL:                getEnvBool("MINIO_USE_SSL", false),
+			UploadBucket:          getEnv("MINIO_UPLOAD_BUCKET", "uploads"),
+			DownloadBucket:        getEnv("MINIO_DOWNLOAD_BUCKET", "downloads"),
+			ConnectMaxAttempts:    getEnvInt("MINIO_CONNECT_MAX_ATTEMPTS", 20),
+			ConnectInitialBackoff: getEnvDuration("MINIO_CONNECT_INITIAL_BACKOFF", time.Second),
+			ConnectMaxBackoff:     getEnvDuration("MINIO_CONNECT_MAX_BACKOFF", 10*time.Second),
 		},
 		JWT: JWTConfig{
 			Secret:     getEnv("JWT_SECRET", "change_me"),
@@ -172,6 +179,21 @@ func getEnvBool(key string, fallback bool) bool {
 	}
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	value := getEnv(key, "")
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	if parsed <= 0 {
 		return fallback
 	}
 	return parsed

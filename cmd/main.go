@@ -38,10 +38,9 @@ func main() {
 	ctx := context.Background()
 	slog.Info("starting program")
 
-	if err := godotenv.Load(".env"); err != nil {
-		slog.Error("failed to load .env", "error", err)
-		os.Exit(1)
-	}
+	// Load env files opportunistically for local dev.
+	// In containers, runtime env vars should be enough and missing files are non-fatal.
+	loadDotEnvFiles(".env", "../.env")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -183,5 +182,14 @@ func main() {
 	if err := router.Run(addr); err != nil {
 		logger.Error("Server failed", "error", err)
 		log.Fatalf("Server failed: %v", err)
+	}
+}
+
+func loadDotEnvFiles(paths ...string) {
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		_ = godotenv.Load(p)
 	}
 }

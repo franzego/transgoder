@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoad_FromEnvironment(t *testing.T) {
 	t.Setenv("SERVER_HOST", "127.0.0.1")
@@ -9,6 +12,9 @@ func TestLoad_FromEnvironment(t *testing.T) {
 	t.Setenv("REDIS_HOST", "redis.local")
 	t.Setenv("REDIS_PORT", "6380")
 	t.Setenv("MINIO_USE_SSL", "true")
+	t.Setenv("MINIO_CONNECT_MAX_ATTEMPTS", "9")
+	t.Setenv("MINIO_CONNECT_INITIAL_BACKOFF", "2s")
+	t.Setenv("MINIO_CONNECT_MAX_BACKOFF", "15s")
 	t.Setenv("JWT_TTL_MINUTES", "15")
 
 	cfg, err := Load()
@@ -26,6 +32,15 @@ func TestLoad_FromEnvironment(t *testing.T) {
 	}
 	if !cfg.Minio.UseSSL {
 		t.Fatal("expected minio ssl to be true")
+	}
+	if cfg.Minio.ConnectMaxAttempts != 9 {
+		t.Fatalf("expected minio max attempts 9, got %d", cfg.Minio.ConnectMaxAttempts)
+	}
+	if cfg.Minio.ConnectInitialBackoff != 2*time.Second {
+		t.Fatalf("expected minio initial backoff 2s, got %s", cfg.Minio.ConnectInitialBackoff)
+	}
+	if cfg.Minio.ConnectMaxBackoff != 15*time.Second {
+		t.Fatalf("expected minio max backoff 15s, got %s", cfg.Minio.ConnectMaxBackoff)
 	}
 	if cfg.JWT.TTLMinutes != 15 {
 		t.Fatalf("expected jwt ttl 15, got %d", cfg.JWT.TTLMinutes)
@@ -45,6 +60,11 @@ func TestHelpersAndAddresses(t *testing.T) {
 	t.Setenv("BAD_BOOL", "not-a-bool")
 	if got := getEnvBool("BAD_BOOL", true); !got {
 		t.Fatalf("expected bool fallback true, got %v", got)
+	}
+
+	t.Setenv("BAD_DURATION", "not-a-duration")
+	if got := getEnvDuration("BAD_DURATION", 3*time.Second); got != 3*time.Second {
+		t.Fatalf("expected duration fallback 3s, got %s", got)
 	}
 
 	cfg := &Config{
