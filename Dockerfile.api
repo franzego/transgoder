@@ -1,6 +1,8 @@
 FROM golang:1.25-bookworm AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
+# Include local replaced module manifests before dependency download.
+COPY grpc/go.mod grpc/go.sum ./grpc/
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/transcoder-api ./cmd/main.go
