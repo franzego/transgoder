@@ -281,7 +281,7 @@ const file_transcoder_proto_rawDesc = "" +
 	"durationMs\x12#\n" +
 	"\rerror_message\x18\x06 \x01(\tR\ferrorMessage2b\n" +
 	"\x11TranscoderService\x12M\n" +
-	"\x0eTranscodeVideo\x12\x1c.transcoder.TranscodeRequest\x1a\x1d.transcoder.TranscodeResponseB,Z*github.com/franzego/transgoder/grpc/serverb\x06proto3"
+	"\x0eTranscodeVideo\x12\x1c.transcoder.TranscodeRequest\x1a\x1d.transcoder.TranscodeResponseB,Z*github.com/franzego/transcoder/grpc/serverb\x06proto3"
 
 var (
 	file_transcoder_proto_rawDescOnce sync.Once

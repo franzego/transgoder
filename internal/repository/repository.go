@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"github.com/franzego/transgoder/internal/sqlc"
+	"github.com/franzego/transcoder/internal/sqlc"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

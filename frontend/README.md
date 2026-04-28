@@ -43,6 +43,8 @@ npm run dev
 
 The app will be available at `http://localhost:3000`. API calls are proxied to the backend.
 
+Optional: set `VITE_API_BASE_URL` (for example `http://localhost:8084`) to bypass Vite proxy and call API directly.
+
 ### Build
 
 Compile and minify for production:
@@ -62,6 +64,8 @@ The frontend expects the following endpoints from the backend:
 - `GET /jobs/:id/source-url`: Get presigned URL for the source file.
 - `GET /jobs/:id/output-url`: Get presigned URL for the transcoded file.
 - `GET /jobs/:id/download`: Direct stream of the output video.
+- `GET /presets`: List available transcode presets.
+- `GET /presets/:id`: Fetch a single preset by ID.
 
 ## Visual Design Tokens
 

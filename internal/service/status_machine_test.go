@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franzego/transgoder/internal/models"
+	"github.com/franzego/transcoder/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -36,10 +36,16 @@ func TestCanTransition(t *testing.T) {
 
 func TestRepoService_TransitionTo(t *testing.T) {
 	t.Run("invalid transition returns service error", func(t *testing.T) {
+		ts := pgtype.Timestamptz{}
 		svc := buildRepoServiceWithDB(&fakeDB{
-			queryRow: func(_ context.Context, _ string, _ ...interface{}) pgx.Row {
-				t.Fatal("db should not be called for invalid transition")
-				return fakeRow{}
+			queryRow: func(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+				if strings.Contains(sql, "GetJobByJobID") {
+					return fakeRow{values: []interface{}{int32(1), "JB-1", string(models.StatusQueued), ts, ts}}
+				}
+				if strings.Contains(sql, "UpdateJobStatus") {
+					t.Fatal("db should not call update for invalid transition")
+				}
+				return fakeRow{err: errors.New("unexpected query")}
 			},
 		})
 
@@ -55,18 +61,27 @@ func TestRepoService_TransitionTo(t *testing.T) {
 
 	t.Run("valid transition updates status", func(t *testing.T) {
 		ts := pgtype.Timestamptz{}
+		calls := 0
 		db := &fakeDB{
 			queryRow: func(_ context.Context, sql string, args ...interface{}) pgx.Row {
-				if !strings.Contains(sql, "UpdateJobStatus") {
+				calls++
+				switch {
+				case strings.Contains(sql, "GetJobByJobID"):
+					if len(args) != 1 || args[0] != "JB-2" {
+						return fakeRow{err: errors.New("unexpected get args")}
+					}
+					return fakeRow{values: []interface{}{int32(1), "JB-2", string(models.StatusPending), ts, ts}}
+				case strings.Contains(sql, "UpdateJobStatus"):
+					if len(args) != 2 {
+						return fakeRow{err: errors.New("unexpected query args")}
+					}
+					if args[0] != "JB-2" || args[1] != string(models.StatusQueued) {
+						return fakeRow{err: errors.New("unexpected transition args")}
+					}
+					return fakeRow{values: []interface{}{int32(1), "JB-2", string(models.StatusQueued), ts, ts}}
+				default:
 					return fakeRow{err: errors.New("unexpected query")}
 				}
-				if len(args) != 2 {
-					return fakeRow{err: errors.New("unexpected query args")}
-				}
-				if args[0] != "JB-2" || args[1] != string(models.StatusQueued) {
-					return fakeRow{err: errors.New("unexpected transition args")}
-				}
-				return fakeRow{values: []interface{}{int32(1), "JB-2", string(models.StatusQueued), ts, ts}}
 			},
 		}
 		svc := buildRepoServiceWithDB(db)
@@ -75,11 +90,18 @@ func TestRepoService_TransitionTo(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		if calls != 2 {
+			t.Fatalf("expected 2 db calls, got %d", calls)
+		}
 	})
 
 	t.Run("db failure is wrapped", func(t *testing.T) {
 		db := &fakeDB{
 			queryRow: func(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+				if strings.Contains(sql, "GetJobByJobID") {
+					ts := pgtype.Timestamptz{}
+					return fakeRow{values: []interface{}{int32(1), "JB-3", string(models.StatusPending), ts, ts}}
+				}
 				if strings.Contains(sql, "UpdateJobStatus") {
 					return fakeRow{err: errors.New("db down")}
 				}
@@ -95,6 +117,53 @@ func TestRepoService_TransitionTo(t *testing.T) {
 		}
 		if se.Message != "Failed to update job status" {
 			t.Fatalf("unexpected message: %q", se.Message)
+		}
+	})
+
+	t.Run("stale transition returns conflict", func(t *testing.T) {
+		ts := pgtype.Timestamptz{}
+		svc := buildRepoServiceWithDB(&fakeDB{
+			queryRow: func(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+				if strings.Contains(sql, "GetJobByJobID") {
+					return fakeRow{values: []interface{}{int32(1), "JB-4", string(models.StatusCompleted), ts, ts}}
+				}
+				if strings.Contains(sql, "UpdateJobStatus") {
+					t.Fatal("db should not update for stale transition")
+				}
+				return fakeRow{err: errors.New("unexpected query")}
+			},
+		})
+
+		err := svc.TransitionTo(context.Background(), "JB-4", models.StatusQueued, models.StatusDownloading)
+		var se *ServiceError
+		if !errors.As(err, &se) {
+			t.Fatalf("expected ServiceError, got %T", err)
+		}
+		if !errors.Is(err, ErrStaleTransition) {
+			t.Fatalf("expected ErrStaleTransition, got %v", err)
+		}
+		if se.Code != 409 {
+			t.Fatalf("expected conflict code, got %d", se.Code)
+		}
+	})
+
+	t.Run("same-state transition is idempotent", func(t *testing.T) {
+		ts := pgtype.Timestamptz{}
+		svc := buildRepoServiceWithDB(&fakeDB{
+			queryRow: func(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+				if strings.Contains(sql, "GetJobByJobID") {
+					return fakeRow{values: []interface{}{int32(1), "JB-5", string(models.StatusQueued), ts, ts}}
+				}
+				if strings.Contains(sql, "UpdateJobStatus") {
+					t.Fatal("db should not update for same-state transition")
+				}
+				return fakeRow{err: errors.New("unexpected query")}
+			},
+		})
+
+		err := svc.TransitionTo(context.Background(), "JB-5", models.StatusQueued, models.StatusQueued)
+		if err != nil {
+			t.Fatalf("expected nil for idempotent transition, got %v", err)
 		}
 	})
 }

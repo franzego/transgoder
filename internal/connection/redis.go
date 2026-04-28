@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/franzego/transgoder/internal/config"
+	"github.com/franzego/transcoder/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 

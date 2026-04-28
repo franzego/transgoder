@@ -13,9 +13,10 @@ import (
 	"time"
 
 	transcoderpb "github.com/franzego/transcoder/grpc/server"
-	"github.com/franzego/transgoder/internal/models"
-	"github.com/franzego/transgoder/internal/sqlc"
-	"github.com/franzego/transgoder/pkg"
+	"github.com/franzego/transcoder/internal/models"
+	"github.com/franzego/transcoder/internal/service"
+	"github.com/franzego/transcoder/internal/sqlc"
+	"github.com/franzego/transcoder/pkg"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -408,21 +409,21 @@ func TestCompleteMultipartUploadHandler_TransitionPendingToQueued(t *testing.T) 
 		getJobByJobIDFn: func(_ context.Context, jobID string) (sqlc.Job, error) {
 			return sqlc.Job{JobID: "JB-123"}, nil
 		},
-			createVideoMetaFn: func(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error) {
-				if arg.JobID != "JB-123" {
-					t.Fatalf("expected video meta for JB-123, got %s", arg.JobID)
-				}
-				if !arg.Format.Valid || arg.Format.String != "mp4" {
-					t.Fatalf("expected required format mp4, got %+v", arg.Format)
-				}
-				if !arg.Resolution.Valid || arg.Resolution.String != "1080" {
-					t.Fatalf("expected default resolution 1080, got %+v", arg.Resolution)
-				}
-				if arg.Codec != "h264" {
-					t.Fatalf("expected default codec h264, got %+v", arg.Codec)
-				}
-				return sqlc.Videometum{}, nil
-			},
+		createVideoMetaFn: func(ctx context.Context, arg models.VideoMedataReq) (sqlc.Videometum, error) {
+			if arg.JobID != "JB-123" {
+				t.Fatalf("expected video meta for JB-123, got %s", arg.JobID)
+			}
+			if !arg.Format.Valid || arg.Format.String != "mp4" {
+				t.Fatalf("expected required format mp4, got %+v", arg.Format)
+			}
+			if !arg.Resolution.Valid || arg.Resolution.String != "1080" {
+				t.Fatalf("expected default resolution 1080, got %+v", arg.Resolution)
+			}
+			if arg.Codec != "h264" {
+				t.Fatalf("expected default codec h264, got %+v", arg.Codec)
+			}
+			return sqlc.Videometum{}, nil
+		},
 		transitionToFn: func(_ context.Context, jobID string, from, to models.Status) error {
 			if jobID != "JB-123" {
 				t.Fatalf("expected transition for JB-123, got %s", jobID)
@@ -523,8 +524,8 @@ func TestCompleteMultipartUploadHandler_InvalidResolutionReturns400(t *testing.T
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
 	}
-	if !bytes.Contains(w.Body.Bytes(), []byte(`"Invalid resolution"`)) {
-		t.Fatalf("expected invalid resolution response, got %s", w.Body.String())
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"resolution must be one of 480, 720, 1080"`)) {
+		t.Fatalf("expected normalized resolution validation response, got %s", w.Body.String())
 	}
 }
 
@@ -570,16 +571,58 @@ func TestUpdateStatus_ValidationFailureReturns400(t *testing.T) {
 	}
 }
 
-func TestUpdateStatus_TransitionFailureReturns500(t *testing.T) {
+func TestUpdateStatus_TransitionFailureReturns400ForInvalidTransition(t *testing.T) {
 	repo := &repoMock{
 		transitionToFn: func(_ context.Context, _ string, _ models.Status, _ models.Status) error {
-			return errors.New("invalid transition")
+			return &service.ServiceError{Err: service.ErrInvalidTransition, Code: http.StatusBadRequest, Message: "Invalid transition was attempted"}
 		},
 	}
 	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
 	w := performUpdateStatus(t, h, "JB-112", map[string]any{
 		"id":   "JB-112",
 		"from": "pending",
+		"to":   "failed",
+	})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"error_code":"INVALID_STATE"`)) {
+		t.Fatalf("expected invalid state error code in response, got %s", w.Body.String())
+	}
+}
+
+func TestUpdateStatus_TransitionFailureReturns409ForStaleTransition(t *testing.T) {
+	repo := &repoMock{
+		transitionToFn: func(_ context.Context, _ string, _ models.Status, _ models.Status) error {
+			return &service.ServiceError{Err: service.ErrStaleTransition, Code: http.StatusConflict, Message: "Transition does not match current job status"}
+		},
+	}
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
+	w := performUpdateStatus(t, h, "JB-113", map[string]any{
+		"id":   "JB-113",
+		"from": "queued",
+		"to":   "downloading",
+	})
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"error_code":"INVALID_STATE"`)) {
+		t.Fatalf("expected invalid state error code in response, got %s", w.Body.String())
+	}
+}
+
+func TestUpdateStatus_TransitionFailureReturns500ForUnexpectedError(t *testing.T) {
+	repo := &repoMock{
+		transitionToFn: func(_ context.Context, _ string, _ models.Status, _ models.Status) error {
+			return errors.New("db unavailable")
+		},
+	}
+	h := newTestHandler(repo, &minioMock{uploadBucket: "uploads"}, &redisMock{}, nil)
+	w := performUpdateStatus(t, h, "JB-114", map[string]any{
+		"id":   "JB-114",
+		"from": "queued",
 		"to":   "failed",
 	})
 
@@ -629,7 +672,7 @@ func TestGetSourceVideoURL_Success(t *testing.T) {
 		},
 	}
 	minioSvc := &minioMock{
-		uploadBucket: "uploads",
+		uploadBucket:   "uploads",
 		downloadBucket: "downloads",
 		getPresignedFn: func(_ context.Context, bucketName, jobID string) (string, error) {
 			if bucketName != "uploads" || jobID != "JB-999" {
@@ -669,7 +712,7 @@ func TestGetSourceVideoURL_FailureReturns500(t *testing.T) {
 			},
 		}
 		minioSvc := &minioMock{
-			uploadBucket: "uploads",
+			uploadBucket:   "uploads",
 			downloadBucket: "downloads",
 			getPresignedFn: func(_ context.Context, _, _ string) (string, error) {
 				return "", errors.New("minio down")

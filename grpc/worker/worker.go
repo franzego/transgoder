@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/franzego/transcoder/grpc/repository"
 	"github.com/franzego/transcoder/grpc/service"
@@ -12,21 +15,60 @@ import (
 
 type Workerpool struct {
 	workers   int
-	redisRepo *repository.RedisRepo
+	redisRepo redisQueue
 	processor service.Transcoder
 	consumer  string
+
+	mu       sync.Mutex
+	inFlight map[string]struct{}
 }
 
-func NewWorkerPool(workers int, redRepo *repository.RedisRepo, processor service.Transcoder) *Workerpool {
+type redisQueue interface {
+	GetFromStream(ctx context.Context, workerID string) (repository.JobStuff, error)
+	Ack(ctx context.Context, messageID string) error
+}
+
+func NewWorkerPool(workers int, redRepo redisQueue, processor service.Transcoder) *Workerpool {
 	if redRepo == nil || processor == nil || workers <= 0 {
 		return nil
 	}
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "unknown-host"
+	}
+	consumer := fmt.Sprintf("pool-dispatcher-%s-%d-%d", strings.ReplaceAll(hostname, " ", "_"), os.Getpid(), time.Now().UnixNano())
+
 	return &Workerpool{
 		workers:   workers,
 		redisRepo: redRepo,
 		processor: processor,
-		consumer:  fmt.Sprintf("pool-dispatcher-%d", workers),
+		consumer:  consumer,
+		inFlight:  make(map[string]struct{}),
 	}
+}
+
+// reserveJob attempts to reserve a job ID for processing. It returns true if the job ID was successfully reserved, or false if it is already in-flight or invalid.
+func (wp *Workerpool) reserveJob(jobID string) bool {
+	if jobID == "" {
+		return false
+	}
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	// a simple in-memory map is used to track in-flight job IDs.
+	if _, exists := wp.inFlight[jobID]; exists {
+		return false
+	}
+	wp.inFlight[jobID] = struct{}{}
+	return true
+}
+
+func (wp *Workerpool) releaseJob(jobID string) {
+	if jobID == "" {
+		return
+	}
+	wp.mu.Lock()
+	delete(wp.inFlight, jobID)
+	wp.mu.Unlock()
 }
 
 // Dispacter takes jobs from the redis stream and puts them into the channel for consumption by the worker pool
@@ -46,8 +88,16 @@ func (wp *Workerpool) Dispatcher(ctx context.Context, jobs chan<- repository.Job
 		if job.JobID == "" {
 			continue
 		}
+		// we try to reserve the job ID for processing. If it returns false, it means this job is already being processed by another worker,
+		// so we skip it to avoid duplicate work.
+		if !wp.reserveJob(job.JobID) {
+			slog.Warn("Skipping duplicate in-flight job", "job_id", job.JobID, "message_id", job.StreamMessage)
+			continue
+		}
 		select {
 		case <-ctx.Done():
+			// this is to release the reserved job ID if the context is cancelled before the job can be dispatched to a worker, preventing it from being stuck in-flight indefinitely.
+			wp.releaseJob(job.JobID)
 			return
 		case jobs <- job:
 		}
@@ -63,13 +113,28 @@ func (wp *Workerpool) handleResults(ctx context.Context, results <-chan service.
 			if !ok {
 				return
 			}
-			if result.Err != nil {
-				slog.Error("Worker failed to transcode job", "worker_id", result.WorkerID, "job_id", result.Job.JobID, "error", result.Err)
+			wp.releaseJob(result.Job.JobID)
+
+			ackErr := wp.redisRepo.Ack(ctx, result.Job.StreamMessage)
+			if ackErr != nil {
+				slog.Error(
+					"Worker finished job but failed to ack stream message",
+					"worker_id", result.WorkerID,
+					"job_id", result.Job.JobID,
+					"message_id", result.Job.StreamMessage,
+					"error", ackErr,
+				)
 				continue
 			}
-			err := wp.redisRepo.Ack(ctx, result.Job.StreamMessage)
-			if err != nil {
-				slog.Error("Worker completed job but failed to ack stream message", "worker_id", result.WorkerID, "job_id", result.Job.JobID, "message_id", result.Job.StreamMessage, "error", err)
+
+			if result.Err != nil {
+				slog.Error(
+					"Worker finished job with failure and acknowledged message",
+					"worker_id", result.WorkerID,
+					"job_id", result.Job.JobID,
+					"message_id", result.Job.StreamMessage,
+					"error", result.Err,
+				)
 				continue
 			}
 			select {

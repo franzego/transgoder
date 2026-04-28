@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franzego/transgoder/internal/config"
-	"github.com/franzego/transgoder/internal/connection"
+	"github.com/franzego/transcoder/internal/config"
+	"github.com/franzego/transcoder/internal/connection"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )

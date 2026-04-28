@@ -1,4 +1,4 @@
-module github.com/franzego/transgoder
+module github.com/franzego/transcoder
 
 go 1.25.0
 
