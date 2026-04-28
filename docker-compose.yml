@@ -35,52 +35,52 @@ services:
     volumes:
       - minio-data:/data
 
-  # grpc:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.grpc
-  #   container_name: transcoder-grpc
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     SERVER_HOST: 0.0.0.0
-  #     SERVER_PORT: 8099
-  #     REDIS_HOST: redis
-  #     MINIO_ENDPOINT: minio:9000
-  #     WEB_SERVER_URL: http://api:8084
-  #     FFMPEG_PATH: /usr/bin/ffmpeg
-  #     FFPROBE_PATH: /usr/bin/ffprobe
-  #   depends_on:
-  #     - redis
-  #     - minio
-  #   ports:
-  #     - "8099:8099"
+  grpc:
+    build:
+      context: .
+      dockerfile: Dockerfile.grpc
+    container_name: transcoder-grpc
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8099
+      REDIS_HOST: redis
+      MINIO_ENDPOINT: minio:9000
+      WEB_SERVER_URL: http://api:8084
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      FFPROBE_PATH: /usr/bin/ffprobe
+    depends_on:
+      - redis
+      - minio
+    ports:
+      - "8099:8099"
 
-  # api:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.api
-  #   container_name: transcoder-api
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     SERVER_HOST: 0.0.0.0
-  #     SERVER_PORT: 8084
-  #     GRPC_SERVER_ADDR: grpc:8099
-  #     POSTGRES_HOST: postgres
-  #     POSTGRES_PORT: 5432
-  #     REDIS_HOST: redis
-  #     MINIO_ENDPOINT: minio:9000
-  #     FFMPEG_PATH: /usr/bin/ffmpeg
-  #   depends_on:
-  #     - postgres
-  #     - redis
-  #     - minio
-  #     - grpc
-  #   ports:
-  #     - "8084:8084"
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: transcoder-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8084
+      GRPC_SERVER_ADDR: grpc:8099
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      MINIO_ENDPOINT: minio:9000
+      FFMPEG_PATH: /usr/bin/ffmpeg
+    depends_on:
+      - postgres
+      - redis
+      - minio
+      - grpc
+    ports:
+      - "8084:8084"
 
 volumes:
   postgres-data:
